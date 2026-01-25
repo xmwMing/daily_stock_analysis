@@ -563,6 +563,13 @@ class AkshareFetcher(BaseFetcher):
         Returns:
             RealtimeQuote 对象，获取失败返回 None
         """
+        # 检查今天是否为周末（A股休市），如果是，跳过实时行情获取
+        from datetime import datetime
+        today = datetime.now().weekday()  # 0-6，0=周一，6=周日
+        if today in [5, 6]:  # 周六或周日
+            logger.info(f"[API跳过] 今天是周末，A股休市，跳过 {stock_code} 实时行情获取")
+            return None
+        
         # 根据代码类型选择不同的获取方法
         if _is_hk_code(stock_code):
             return self._get_hk_realtime_quote(stock_code)
