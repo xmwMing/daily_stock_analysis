@@ -369,6 +369,36 @@ def get_config() -> Config:
     return Config.get_instance()
 
 
+# === 热门股票推荐配置 ===
+HOT_STOCK_CONFIG = {
+    'cache_ttl': 1800,           # 缓存有效期（秒），默认30分钟
+    'top_n': 5,                  # 推荐数量
+    'max_concurrent': 10,        # 最大并发数
+    'min_score': 60,             # 最低评分阈值
+    'history_days': 60,          # 历史数据天数
+    'min_history_days': 30,      # 最少历史数据天数
+    
+    # 热门股票获取数量（从每个榜单获取的股票数）
+    'fetch_count': 20,           # 从每个榜单获取的股票数量（默认30只）
+                                 # 涨幅榜、成交额榜、换手率榜各取这么多只
+                                 # 合并去重后通常会得到 30-60 只候选股票
+    
+    # 过滤条件
+    'filter': {
+        'min_price': 3.0,        # 最低价格（元）
+        'max_price': 300.0,      # 最高价格（元）
+        'min_market_cap': 5e9,   # 最小市值（50亿元）
+        'min_list_days': 90,     # 最少上市天数
+    },
+    
+    # 评分权重
+    'score_weights': {
+        'trend': 0.6,            # 趋势评分权重
+        'market_heat': 0.4,      # 市场热度权重
+    },
+}
+
+
 if __name__ == "__main__":
     # 测试配置加载
     config = get_config()

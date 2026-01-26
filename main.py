@@ -809,7 +809,7 @@ def run_full_analysis(
     stock_codes: Optional[List[str]] = None
 ):
     """
-    执行完整的分析流程（个股 + 大盘复盘）
+    执行完整的分析流程（个股 + 大盘复盘 + 热门股票推荐）
     
     这是定时任务调用的主函数
     """
@@ -844,6 +844,48 @@ def run_full_analysis(
             if review_result:
                 market_report = review_result
         
+        # 3. 运行热门股票推荐（新增）
+        hot_stock_report = ""
+        if not args.dry_run:  # 只在非 dry-run 模式下运行
+            try:
+                logger.info("开始热门股票推荐...")
+                from hot_stock_recommender import HotStockRecommender
+                
+                # 复用现有的数据获取器和趋势分析器
+                hot_recommender = HotStockRecommender(
+                    data_fetcher=pipeline.fetcher_manager,
+                    trend_analyzer=pipeline.trend_analyzer
+                )
+                
+                # 执行推荐流程
+                hot_stock_report = hot_recommender.run()
+                
+                # 保存推荐报告到文件
+                if hot_stock_report:
+                    from datetime import datetime
+                    date_str = datetime.now().strftime('%Y%m%d')
+                    report_filename = f"hot_stock_recommendations_{date_str}.md"
+                    filepath = pipeline.notifier.save_report_to_file(
+                        hot_stock_report,
+                        report_filename
+                    )
+                    logger.info(f"热门股票推荐报告已保存: {filepath}")
+                    
+                    # 推送通知（如果启用）
+                    if not args.no_notify and pipeline.notifier.is_available():
+                        # 添加标题
+                        report_content = f"# 🔥 热门股票推荐\n\n{hot_stock_report}"
+                        success = pipeline.notifier.send(report_content)
+                        if success:
+                            logger.info("热门股票推荐推送成功")
+                        else:
+                            logger.warning("热门股票推荐推送失败")
+                
+            except Exception as e:
+                logger.error(f"热门股票推荐失败: {e}")
+                logger.exception("详细错误信息:")
+                # 推荐失败不影响其他任务
+        
         # 输出摘要
         if results:
             logger.info("\n===== 分析结果摘要 =====")
@@ -859,7 +901,7 @@ def run_full_analysis(
         # === 新增：生成飞书云文档 ===
         try:
             feishu_doc = FeishuDocManager()
-            if feishu_doc.is_configured() and (results or market_report):
+            if feishu_doc.is_configured() and (results or market_report or hot_stock_report):
                 logger.info("正在创建飞书云文档...")
 
                 # 1. 准备标题 "01-01 13:01大盘复盘"
@@ -867,7 +909,7 @@ def run_full_analysis(
                 now = datetime.now(tz_cn)
                 doc_title = f"{now.strftime('%Y-%m-%d %H:%M')} 大盘复盘"
 
-                # 2. 准备内容 (拼接个股分析和大盘复盘)
+                # 2. 准备内容 (拼接个股分析、大盘复盘和热门股票推荐)
                 full_content = ""
 
                 # 添加大盘复盘内容（如果有）
@@ -877,7 +919,11 @@ def run_full_analysis(
                 # 添加个股决策仪表盘（使用 NotificationService 生成）
                 if results:
                     dashboard_content = pipeline.notifier.generate_dashboard_report(results)
-                    full_content += f"# 🚀 个股决策仪表盘\n\n{dashboard_content}"
+                    full_content += f"# 🚀 个股决策仪表盘\n\n{dashboard_content}\n\n---\n\n"
+                
+                # 添加热门股票推荐（如果有）
+                if hot_stock_report:
+                    full_content += f"{hot_stock_report}"
 
                 # 3. 创建文档
                 doc_url = feishu_doc.create_daily_doc(doc_title, full_content)
