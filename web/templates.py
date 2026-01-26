@@ -725,7 +725,7 @@ def render_config_page(
         }
         
         let detailHtml = '';
-        if (status === 'completed' && result.name) {
+        if (status === 'completed') {
             detailHtml = '<div class="task-detail" id="detail_' + taskId + '">' +
                 '<div class="task-detail-row"><span class="label">趋势</span><span>' + (result.trend_prediction || '-') + '</span></div>' +
                 (result.analysis_summary ? '<div class="task-detail-summary">' + result.analysis_summary.substring(0, 100) + '...</div>' : '') +
@@ -737,7 +737,7 @@ def render_config_page(
             '<div class="task-main">' +
                 '<div class="task-title">' +
                     '<span class="code">' + code + '</span>' +
-                    (result.name ? '<span class="name">' + result.name + '</span>' : '') +
+                    '<span class="name">' + (result.name || code) + '</span>' +
                 '</div>' +
                 '<div class="task-meta">' +
                     '<span>⏱ ' + formatTime(task.start_time) + '</span>' +
@@ -922,7 +922,7 @@ def render_config_page(
           <input 
               type="text" 
               id="analysis_code" 
-              placeholder="A股 600519 / 港股 hk00700"
+              placeholder="A股 600519 / 港股 hk00700 / 美股 AAPL"
               maxlength="8"
               autocomplete="off"
           />

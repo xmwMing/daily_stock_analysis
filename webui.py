@@ -67,7 +67,7 @@ __all__ = [
 
 def _start_bot_stream_clients() -> None:
     """启动 Bot Stream 模式客户端（如果已配置）"""
-    from config import get_config
+    from src.config import get_config
     config = get_config()
     
     # 钉钉 Stream 模式

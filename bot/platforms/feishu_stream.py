@@ -391,7 +391,7 @@ class FeishuStreamClient:
                 "请运行: pip install lark-oapi"
             )
 
-        from config import get_config
+        from src.config import get_config
         config = get_config()
 
         self._app_id = app_id or getattr(config, 'feishu_app_id', None)
@@ -431,7 +431,7 @@ class FeishuStreamClient:
         # 创建并注册事件处理器
         # 注意：encrypt_key 和 verification_token 在长连接模式下不是必需的
         # 但 SDK 要求传入（可以为空字符串）
-        from config import get_config
+        from src.config import get_config
         config = get_config()
         
         encrypt_key = getattr(config, 'feishu_encrypt_key', '') or ''

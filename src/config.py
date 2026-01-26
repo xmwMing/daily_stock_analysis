@@ -43,16 +43,18 @@ class Config:
     gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-3-flash-preview"  # 主模型
     gemini_model_fallback: str = "gemini-2.5-flash"  # 备选模型
-    
+    gemini_temperature: float = 0.7  # 温度参数（0.0-2.0，控制输出随机性，默认0.7）
+
     # Gemini API 请求配置（防止 429 限流）
     gemini_request_delay: float = 2.0  # 请求间隔（秒）
     gemini_max_retries: int = 5  # 最大重试次数
     gemini_retry_delay: float = 5.0  # 重试基础延时（秒）
-    
+
     # OpenAI 兼容 API（备选，当 Gemini 不可用时使用）
     openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None  # 如: https://api.openai.com/v1
     openai_model: str = "gpt-4o-mini"  # OpenAI 兼容模型名称
+    openai_temperature: float = 0.7  # OpenAI 温度参数（0.0-2.0，默认0.7）
     
     # === 搜索引擎配置（支持多 Key 负载均衡）===
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
@@ -92,7 +94,16 @@ class Config:
     
     # 单股推送模式：每分析完一只股票立即推送，而不是汇总后推送
     single_stock_notify: bool = False
-    
+
+    # 报告类型：simple(精简) 或 full(完整)
+    report_type: str = "simple"
+
+    # PushPlus 推送配置
+    pushplus_token: Optional[str] = None  # PushPlus Token
+
+    # 分析间隔时间（秒）- 用于避免API限流
+    analysis_delay: float = 0.0  # 个股分析与大盘分析之间的延迟
+
     # 消息长度限制（字节）- 超长自动分批发送
     feishu_max_bytes: int = 20000  # 飞书限制约 20KB，默认 20000 字节
     wechat_max_bytes: int = 4000   # 企业微信限制 4096 字节，默认 4000 字节
@@ -107,12 +118,29 @@ class Config:
     # === 系统配置 ===
     max_workers: int = 3  # 低并发防封禁
     debug: bool = False
+    http_proxy: Optional[str] = None  # HTTP 代理 (例如: http://127.0.0.1:10809)
+    https_proxy: Optional[str] = None # HTTPS 代理
     
     # === 定时任务配置 ===
     schedule_enabled: bool = False            # 是否启用定时任务
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
-    
+
+    # === 实时行情增强数据配置 ===
+    # 实时行情开关（关闭后使用历史收盘价进行分析）
+    enable_realtime_quote: bool = True
+    # 筹码分布开关（该接口不稳定，云端部署建议关闭）
+    enable_chip_distribution: bool = True
+    # 实时行情数据源优先级（逗号分隔）
+    realtime_source_priority: str = "akshare_sina,tencent,efinance,akshare_em"
+    # 实时行情缓存时间（秒）
+    realtime_cache_ttl: int = 600
+    # 熔断器冷却时间（秒）
+    circuit_breaker_cooldown: int = 300
+
+    # Discord 机器人状态
+    discord_bot_status: str = "A股智能分析 | /help"
+
     # === 流控配置（防封禁关键参数）===
     # Akshare 请求间隔范围（秒）
     akshare_sleep_min: float = 2.0
@@ -157,6 +185,9 @@ class Config:
     # Telegram 机器人 - 已有 telegram_bot_token, telegram_chat_id
     telegram_webhook_secret: Optional[str] = None   # Webhook 密钥
     
+    # Discord 机器人扩展配置
+    discord_bot_status: str = "A股智能分析 | /help"  # 机器人状态信息
+    
     # 单例实例存储
     _instance: Optional['Config'] = None
     
@@ -185,8 +216,51 @@ class Config:
         3. 代码中的默认值
         """
         # 加载项目根目录下的 .env 文件
-        env_path = Path(__file__).parent / '.env'
+        # src/config.py -> src/ -> root
+        env_path = Path(__file__).parent.parent / '.env'
         load_dotenv(dotenv_path=env_path)
+
+        # === 智能代理配置 (关键修复) ===
+        # 如果配置了代理，自动设置 NO_PROXY 以排除国内数据源，避免行情获取失败
+        http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+        if http_proxy:
+            # 国内金融数据源域名列表
+            domestic_domains = [
+                'eastmoney.com',   # 东方财富 (Efinance/Akshare)
+                'sina.com.cn',     # 新浪财经 (Akshare)
+                '163.com',         # 网易财经 (Akshare)
+                'tushare.pro',     # Tushare
+                'baostock.com',    # Baostock
+                'sse.com.cn',      # 上交所
+                'szse.cn',         # 深交所
+                'csindex.com.cn',  # 中证指数
+                'cninfo.com.cn',   # 巨潮资讯
+                'localhost',
+                '127.0.0.1'
+            ]
+
+            # 获取现有的 no_proxy
+            current_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
+            existing_domains = current_no_proxy.split(',') if current_no_proxy else []
+
+            # 合并去重
+            final_domains = list(set(existing_domains + domestic_domains))
+            final_no_proxy = ','.join(filter(None, final_domains))
+
+            # 设置环境变量 (requests/urllib3/aiohttp 都会遵守此设置)
+            os.environ['NO_PROXY'] = final_no_proxy
+            os.environ['no_proxy'] = final_no_proxy
+
+            # 确保 HTTP_PROXY 也被正确设置（以防仅在 .env 中定义但未导出）
+            os.environ['HTTP_PROXY'] = http_proxy
+            os.environ['http_proxy'] = http_proxy
+
+            # HTTPS_PROXY 同理
+            https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+            if https_proxy:
+                os.environ['HTTPS_PROXY'] = https_proxy
+                os.environ['https_proxy'] = https_proxy
+
         
         # 解析自选股列表（逗号分隔）
         stock_list_str = os.getenv('STOCK_LIST', '')
@@ -219,12 +293,14 @@ class Config:
             gemini_api_key=os.getenv('GEMINI_API_KEY'),
             gemini_model=os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview'),
             gemini_model_fallback=os.getenv('GEMINI_MODEL_FALLBACK', 'gemini-2.5-flash'),
+            gemini_temperature=float(os.getenv('GEMINI_TEMPERATURE', '0.7')),
             gemini_request_delay=float(os.getenv('GEMINI_REQUEST_DELAY', '2.0')),
             gemini_max_retries=int(os.getenv('GEMINI_MAX_RETRIES', '5')),
             gemini_retry_delay=float(os.getenv('GEMINI_RETRY_DELAY', '5.0')),
             openai_api_key=os.getenv('OPENAI_API_KEY'),
             openai_base_url=os.getenv('OPENAI_BASE_URL'),
             openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+            openai_temperature=float(os.getenv('OPENAI_TEMPERATURE', '0.7')),
             bocha_api_keys=bocha_api_keys,
             tavily_api_keys=tavily_api_keys,
             serpapi_keys=serpapi_keys,
@@ -237,12 +313,15 @@ class Config:
             email_receivers=[r.strip() for r in os.getenv('EMAIL_RECEIVERS', '').split(',') if r.strip()],
             pushover_user_key=os.getenv('PUSHOVER_USER_KEY'),
             pushover_api_token=os.getenv('PUSHOVER_API_TOKEN'),
+            pushplus_token=os.getenv('PUSHPLUS_TOKEN'),
             custom_webhook_urls=[u.strip() for u in os.getenv('CUSTOM_WEBHOOK_URLS', '').split(',') if u.strip()],
             custom_webhook_bearer_token=os.getenv('CUSTOM_WEBHOOK_BEARER_TOKEN'),
             discord_bot_token=os.getenv('DISCORD_BOT_TOKEN'),
             discord_main_channel_id=os.getenv('DISCORD_MAIN_CHANNEL_ID'),
             discord_webhook_url=os.getenv('DISCORD_WEBHOOK_URL'),
             single_stock_notify=os.getenv('SINGLE_STOCK_NOTIFY', 'false').lower() == 'true',
+            report_type=os.getenv('REPORT_TYPE', 'simple').lower(),
+            analysis_delay=float(os.getenv('ANALYSIS_DELAY', '0')),
             feishu_max_bytes=int(os.getenv('FEISHU_MAX_BYTES', '20000')),
             wechat_max_bytes=int(os.getenv('WECHAT_MAX_BYTES', '4000')),
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
@@ -250,6 +329,8 @@ class Config:
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=int(os.getenv('MAX_WORKERS', '3')),
             debug=os.getenv('DEBUG', 'false').lower() == 'true',
+            http_proxy=os.getenv('HTTP_PROXY'),
+            https_proxy=os.getenv('HTTPS_PROXY'),
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
             market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
@@ -277,6 +358,17 @@ class Config:
             wecom_agent_id=os.getenv('WECOM_AGENT_ID'),
             # Telegram
             telegram_webhook_secret=os.getenv('TELEGRAM_WEBHOOK_SECRET'),
+            # Discord 机器人扩展配置
+            discord_bot_status=os.getenv('DISCORD_BOT_STATUS', 'A股智能分析 | /help'),
+            # 实时行情增强数据配置
+            enable_realtime_quote=os.getenv('ENABLE_REALTIME_QUOTE', 'true').lower() == 'true',
+            enable_chip_distribution=os.getenv('ENABLE_CHIP_DISTRIBUTION', 'true').lower() == 'true',
+            # 实时行情数据源优先级：
+            # - akshare_sina/tencent: 单股票直连查询，轻量级，推荐放前面
+            # - efinance/akshare_em: 全量拉取，数据丰富但负载大
+            realtime_source_priority=os.getenv('REALTIME_SOURCE_PRIORITY', 'akshare_sina,tencent,efinance,akshare_em'),
+            realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
+            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300'))
         )
     
     @classmethod
@@ -338,11 +430,12 @@ class Config:
         
         # 检查通知配置
         has_notification = (
-            self.wechat_webhook_url or 
+            self.wechat_webhook_url or
             self.feishu_webhook_url or
             (self.telegram_bot_token and self.telegram_chat_id) or
             (self.email_sender and self.email_password) or
             (self.pushover_user_key and self.pushover_api_token) or
+            self.pushplus_token or
             (self.custom_webhook_urls and self.custom_webhook_bearer_token) or
             (self.discord_bot_token and self.discord_main_channel_id) or
             self.discord_webhook_url

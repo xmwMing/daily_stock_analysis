@@ -49,9 +49,9 @@ jobs:
       
       - name: 🐍 语法检查
         run: |
-          python -m py_compile main.py config.py analyzer.py notification.py
-          python -m py_compile storage.py scheduler.py search_service.py
-          python -m py_compile market_analyzer.py stock_analyzer.py
+          python -m py_compile main.py src/config.py src/analyzer.py src/notification.py
+          python -m py_compile src/storage.py src/scheduler.py src/search_service.py
+          python -m py_compile src/market_analyzer.py src/stock_analyzer.py
           python -m py_compile data_provider/*.py
           echo "✅ Python 语法检查通过"
       
@@ -62,11 +62,11 @@ jobs:
       
       - name: ✅ 模块导入测试
         run: |
-          python -c "from config import get_config; print('✅ config')"
-          python -c "from storage import DatabaseManager; print('✅ storage')"
-          python -c "from notification import NotificationService; print('✅ notification')"
+          python -c "from src.config import get_config; print('✅ config')"
+          python -c "from src.storage import DatabaseManager; print('✅ storage')"
+          python -c "from src.notification import NotificationService; print('✅ notification')"
           python -c "from data_provider import DataFetcherManager; print('✅ data_provider')"
-          python -c "from analyzer import GeminiAnalyzer; print('✅ analyzer')"
+          python -c "from src.analyzer import GeminiAnalyzer; print('✅ analyzer')"
           echo "✅ 所有模块导入成功"
 
   # ==================== Docker 构建测试 ====================
@@ -81,5 +81,5 @@ jobs:
       
       - name: 🐳 构建镜像
         run: |
-          docker build -t stock-analysis:test .
+          docker build -t stock-analysis:test -f docker/Dockerfile .
           docker run --rm stock-analysis:test python -c "print('✅ Docker OK')"
