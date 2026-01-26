@@ -72,11 +72,11 @@ class MarketCommand(BotCommand):
     def _run_market_review(self, message: BotMessage) -> None:
         """后台执行大盘复盘"""
         try:
-            from config import get_config
-            from notification import NotificationService
-            from market_analyzer import MarketAnalyzer
-            from search_service import SearchService
-            from analyzer import GeminiAnalyzer
+            from src.config import get_config
+            from src.notification import NotificationService
+            from src.market_analyzer import MarketAnalyzer
+            from src.search_service import SearchService
+            from src.analyzer import GeminiAnalyzer
 
             config = get_config()
             notifier = NotificationService(source_message=message)

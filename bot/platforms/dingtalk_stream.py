@@ -217,7 +217,7 @@ class DingtalkStreamClient:
                 "请运行: pip install dingtalk-stream"
             )
 
-        from config import get_config
+        from src.config import get_config
         config = get_config()
 
         self._client_id = client_id or getattr(config, 'dingtalk_app_key', None)

@@ -44,7 +44,7 @@ class StatusCommand(BotCommand):
     
     def execute(self, message: BotMessage, args: List[str]) -> BotResponse:
         """执行状态命令"""
-        from config import get_config
+        from src.config import get_config
         
         config = get_config()
         

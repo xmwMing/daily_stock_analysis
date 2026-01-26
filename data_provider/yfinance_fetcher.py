@@ -60,27 +60,51 @@ class YfinanceFetcher(BaseFetcher):
     def _convert_stock_code(self, stock_code: str) -> str:
         """
         转换股票代码为 Yahoo Finance 格式
-        
-        Yahoo Finance A 股代码格式：
-        - 沪市：600519.SS (Shanghai Stock Exchange)
-        - 深市：000001.SZ (Shenzhen Stock Exchange)
-        
+
+        Yahoo Finance 代码格式：
+        - A股沪市：600519.SS (Shanghai Stock Exchange)
+        - A股深市：000001.SZ (Shenzhen Stock Exchange)
+        - 港股：0700.HK (Hong Kong Stock Exchange)
+        - 美股：AAPL, TSLA, GOOGL (无需后缀)
+
         Args:
-            stock_code: 原始代码，如 '600519', '000001'
-            
+            stock_code: 原始代码，如 '600519', 'hk00700', 'AAPL'
+
         Returns:
-            Yahoo Finance 格式代码，如 '600519.SS', '000001.SZ'
+            Yahoo Finance 格式代码
+
+        Examples:
+            >>> fetcher._convert_stock_code('600519')
+            '600519.SS'
+            >>> fetcher._convert_stock_code('hk00700')
+            '0700.HK'
+            >>> fetcher._convert_stock_code('AAPL')
+            'AAPL'
         """
-        code = stock_code.strip()
-        
+        import re
+
+        code = stock_code.strip().upper()
+
+        # 美股：1-5个大写字母（可能包含 .），直接返回
+        if re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code):
+            logger.debug(f"识别为美股代码: {code}")
+            return code
+
+        # 港股：hk前缀 -> .HK后缀
+        if code.startswith('HK'):
+            hk_code = code[2:].lstrip('0') or '0'  # 去除前导0，但保留至少一个0
+            hk_code = hk_code.zfill(4)  # 补齐到4位
+            logger.debug(f"转换港股代码: {stock_code} -> {hk_code}.HK")
+            return f"{hk_code}.HK"
+
         # 已经包含后缀的情况
-        if '.SS' in code.upper() or '.SZ' in code.upper():
-            return code.upper()
-        
-        # 去除可能的后缀
-        code = code.replace('.SH', '').replace('.sh', '')
-        
-        # 根据代码前缀判断市场
+        if '.SS' in code or '.SZ' in code or '.HK' in code:
+            return code
+
+        # 去除可能的 .SH 后缀
+        code = code.replace('.SH', '')
+
+        # A股：根据代码前缀判断市场
         if code.startswith(('600', '601', '603', '688')):
             return f"{code}.SS"
         elif code.startswith(('000', '002', '300')):
