@@ -28,8 +28,8 @@ import numpy as np
 
 from .models import StockInfo, Recommendation
 from data_provider.base import DataFetcherManager
-from stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
-from config import HOT_STOCK_CONFIG
+from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
+from src.config import HOT_STOCK_CONFIG
 
 logger = logging.getLogger(__name__)
 

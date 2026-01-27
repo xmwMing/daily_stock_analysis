@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional
 
 from data_provider import DataFetcherManager
-from stock_analyzer import StockTrendAnalyzer
+from src.stock_analyzer import StockTrendAnalyzer
 
 from .models import Recommendation
 from .finder import HotStockFinder
@@ -54,7 +54,7 @@ class HotStockRecommender:
         # 初始化各组件
         self.finder = HotStockFinder()
         self.recommender = StockRecommender(
-            data_fetcher=self.data_fetcher,
+            data_manager=self.data_fetcher,
             trend_analyzer=self.trend_analyzer
         )
         

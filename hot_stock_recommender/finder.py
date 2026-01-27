@@ -23,7 +23,7 @@ from typing import List, Dict, Optional, Tuple
 import pandas as pd
 
 from .models import StockInfo
-from config import HOT_STOCK_CONFIG
+from src.config import HOT_STOCK_CONFIG
 
 logger = logging.getLogger(__name__)
 
