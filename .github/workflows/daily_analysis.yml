@@ -17,6 +17,7 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+          - hot-stocks-only  # 仅热门股票推荐
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
@@ -174,6 +175,8 @@ jobs:
             python main.py --market-review
           elif [ "$MODE" = "stocks-only" ]; then
             python main.py --no-market-review
+          elif [ "$MODE" = "hot-stocks-only" ]; then
+            python main.py --hot-stocks-only
           else
             python main.py
           fi
