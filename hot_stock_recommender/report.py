@@ -25,13 +25,14 @@ class RecommendationReport:
     """
     
     @staticmethod
-    def generate(recommendations: List[Recommendation], report_date: str = None) -> str:
+    def generate(recommendations: List[Recommendation], report_date: str = None, finder_stats: dict = None) -> str:
         """
         生成推荐报告
         
         Args:
             recommendations: 推荐列表
             report_date: 报告日期（默认今天）
+            finder_stats: 热门股票发现器的统计信息
             
         Returns:
             Markdown 格式的报告内容
@@ -41,7 +42,7 @@ class RecommendationReport:
         
         # 处理空推荐列表
         if not recommendations:
-            return RecommendationReport._generate_empty_report(report_date)
+            return RecommendationReport._generate_empty_report(report_date, finder_stats)
         
         # 生成完整报告
         report_lines = [
@@ -49,9 +50,29 @@ class RecommendationReport:
             "",
             f"> 共推荐 **{len(recommendations)}** 只热门股票",
             "",
-            "---",
-            "",
         ]
+        
+        # 添加统计信息
+        if finder_stats:
+            report_lines.extend([
+                "## 📈 数据统计",
+                "",
+                "| 统计项 | 数量 |",
+                "|--------|------|",
+                f"| 涨幅榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
+                f"| 成交额榜获取 | {finder_stats.get('volume_count', 0)} 只 |",
+                f"| 换手率榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
+                f"| 合并去重后 | {finder_stats.get('total_before_filter', 0)} 只 |",
+                f"| 过滤后剩余 | {finder_stats.get('total_after_filter', 0)} 只 |",
+                "",
+                "---",
+                "",
+            ])
+        else:
+            report_lines.extend([
+                "---",
+                "",
+            ])
         
         # 逐个股票的推荐卡片
         for i, rec in enumerate(recommendations, 1):
@@ -80,37 +101,59 @@ class RecommendationReport:
         return "\n".join(report_lines)
     
     @staticmethod
-    def _generate_empty_report(report_date: str) -> str:
+    def _generate_empty_report(report_date: str, finder_stats: dict = None) -> str:
         """
         生成空推荐报告
         
         Args:
             report_date: 报告日期
+            finder_stats: 热门股票发现器的统计信息
             
         Returns:
             空报告内容
         """
-        return f"""# 🔥 {report_date} 热门股票推荐
-
-> 当前市场无合适推荐
-
-## 📊 市场状况
-
-当前市场环境下，暂无符合推荐条件的热门股票。
-
-可能的原因：
-- 市场整体处于调整期
-- 热门股票涨幅过大（乖离率 > 5%）
-- 未形成多头排列（MA5 > MA10 > MA20）
-- 评分未达到推荐标准（< 60分）
-
-建议：
-- 保持观望，等待更好的买入时机
-- 关注已持仓股票的走势
-- 避免追高，控制风险
-
-*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
-"""
+        report_lines = [
+            f"# 🔥 {report_date} 热门股票推荐",
+            "",
+            "> 当前市场无合适推荐",
+            "",
+        ]
+        
+        # 添加统计信息
+        if finder_stats:
+            report_lines.extend([
+                "## 📈 数据统计",
+                "",
+                "| 统计项 | 数量 |",
+                "|--------|------|",
+                f"| 涨幅榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
+                f"| 成交额榜获取 | {finder_stats.get('volume_count', 0)} 只 |",
+                f"| 换手率榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
+                f"| 合并去重后 | {finder_stats.get('total_before_filter', 0)} 只 |",
+                f"| 过滤后剩余 | {finder_stats.get('total_after_filter', 0)} 只 |",
+                "",
+            ])
+        
+        report_lines.extend([
+            "## 📊 市场状况",
+            "",
+            "当前市场环境下，暂无符合推荐条件的热门股票。",
+            "",
+            "可能的原因：",
+            "- 市场整体处于调整期",
+            "- 热门股票涨幅过大（乖离率 > 5%）",
+            "- 未形成多头排列（MA5 > MA10 > MA20）",
+            "- 评分未达到推荐标准（< 60分）",
+            "",
+            "建议：",
+            "- 保持观望，等待更好的买入时机",
+            "- 关注已持仓股票的走势",
+            "- 避免追高，控制风险",
+            "",
+            f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
+        ])
+        
+        return "\n".join(report_lines)
     
     @staticmethod
     def _format_stock_card(rec: Recommendation, index: int) -> str:
