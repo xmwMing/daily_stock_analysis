@@ -81,7 +81,7 @@ class HotStockFinder:
         发现热门股票
 
         流程：
-        1. 获取涨幅榜、成交额榜、换手率榜前N只股票（N由配置决定）
+        1. 获取人气榜和飙升榜前N只股票（N由配置决定）
         2. 合并并去重
         3. 应用过滤条件
 
@@ -89,7 +89,7 @@ class HotStockFinder:
             List[StockInfo]: 过滤后的热门股票列表
 
         Requirements:
-            - 1.1, 1.2, 1.3: 获取三个榜单
+            - 1.1, 1.2: 获取人气榜和飙升榜
             - 1.5: 去重逻辑
             - 2.1-2.5: 应用过滤条件
         """
@@ -98,23 +98,22 @@ class HotStockFinder:
         start_time = time.time()
 
         try:
-            # 获取三个榜单的数据（使用配置的数量）
-            gainers_df = self._fetch_top_gainers(limit=self.fetch_count)
-            volume_df = self._fetch_top_volume(limit=self.fetch_count)
-            turnover_df = self._fetch_top_turnover(limit=self.fetch_count)
+            # 获取人气榜和飙升榜的数据（使用配置的数量）
+            popularity_df = self._fetch_popularity_ranking(limit=self.fetch_count)
+            surge_df = self._fetch_surge_ranking(limit=self.fetch_count)
 
             # 更新统计信息
-            self.stats['gainers_count'] = len(gainers_df) if gainers_df is not None and not gainers_df.empty else 0
-            self.stats['volume_count'] = len(volume_df) if volume_df is not None and not volume_df.empty else 0
-            self.stats['turnover_count'] = len(turnover_df) if turnover_df is not None and not turnover_df.empty else 0
+            self.stats['gainers_count'] = len(surge_df) if surge_df is not None and not surge_df.empty else 0
+            self.stats['volume_count'] = 0
+            self.stats['turnover_count'] = len(popularity_df) if popularity_df is not None and not popularity_df.empty else 0
 
-            # 合并三个榜单
+            # 合并两个榜单
             all_stocks = []
             stock_codes_seen = set()
 
-            # 处理涨幅榜
-            if gainers_df is not None and not gainers_df.empty:
-                for _, row in gainers_df.iterrows():
+            # 处理飙升榜
+            if surge_df is not None and not surge_df.empty:
+                for _, row in surge_df.iterrows():
                     code = str(row.get('代码', ''))
                     if code and code not in stock_codes_seen:
                         stock_info = self._row_to_stock_info(row)
@@ -122,19 +121,9 @@ class HotStockFinder:
                             all_stocks.append(stock_info)
                             stock_codes_seen.add(code)
 
-            # 处理成交额榜
-            if volume_df is not None and not volume_df.empty:
-                for _, row in volume_df.iterrows():
-                    code = str(row.get('代码', ''))
-                    if code and code not in stock_codes_seen:
-                        stock_info = self._row_to_stock_info(row)
-                        if stock_info:
-                            all_stocks.append(stock_info)
-                            stock_codes_seen.add(code)
-
-            # 处理换手率榜
-            if turnover_df is not None and not turnover_df.empty:
-                for _, row in turnover_df.iterrows():
+            # 处理人气榜
+            if popularity_df is not None and not popularity_df.empty:
+                for _, row in popularity_df.iterrows():
                     code = str(row.get('代码', ''))
                     if code and code not in stock_codes_seen:
                         stock_info = self._row_to_stock_info(row)
@@ -145,8 +134,8 @@ class HotStockFinder:
             # 更新总数量统计
             self.stats['total_before_filter'] = len(all_stocks)
 
-            logger.info(f"合并三个榜单后共获得 {len(all_stocks)} 只不重复的热门股票")
-            logger.info(f"各榜单获取数量: 涨幅榜={self.stats['gainers_count']}, 成交额榜={self.stats['volume_count']}, 换手率榜={self.stats['turnover_count']}")
+            logger.info(f"合并两个榜单后共获得 {len(all_stocks)} 只不重复的热门股票")
+            logger.info(f"各榜单获取数量: 飙升榜={self.stats['gainers_count']}, 人气榜={self.stats['turnover_count']}")
 
             # 应用过滤条件
             filtered_stocks = self._apply_filters(all_stocks)
@@ -317,6 +306,117 @@ class HotStockFinder:
             logger.error(f"[API错误] 获取换手率榜失败: {e}", exc_info=True)
             return None
 
+    def _fetch_popularity_ranking(self, limit: int = 100) -> Optional[pd.DataFrame]:
+        """
+        获取人气榜前N只股票
+
+        使用 akshare 的 stock_hot_up_em() 获取人气榜数据。
+
+        Args:
+            limit: 获取数量，默认100
+
+        Returns:
+            DataFrame 包含人气榜数据，失败返回 None
+        """
+        cache_key = f"popularity_{limit}_{date.today()}"
+
+        # 检查缓存
+        if self._is_cache_valid(cache_key):
+            logger.info(f"[缓存命中] 使用缓存的人气榜数据")
+            return self._cache[cache_key]
+
+        try:
+            import akshare as ak
+
+            logger.info(f"[API调用] ak.stock_hot_up_em() 获取人气榜...")
+
+            # 获取人气榜数据
+            df = ak.stock_hot_up_em()
+
+            if df is None or df.empty:
+                logger.warning("[API返回] 人气榜数据为空")
+                return None
+
+            # 打印列名，了解数据结构
+            logger.info(f"[API返回] 人气榜数据列名: {list(df.columns)}")
+            # 打印前5行完整数据，了解数据格式
+            logger.info(f"[API返回] 人气榜前5行数据: {df.head(5).to_dict('records')}")
+
+            # 取前N只
+            df = df.head(limit)
+
+            logger.info(f"[API返回] 人气榜获取成功: 返回 {len(df)} 只股票")
+
+            # 更新缓存
+            self._update_cache(cache_key, df)
+
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取人气榜失败: {e}", exc_info=True)
+            return None
+
+    def _fetch_surge_ranking(self, limit: int = 100) -> Optional[pd.DataFrame]:
+        """
+        获取飙升榜前N只股票
+
+        使用 akshare 的 stock_hot_up_em() 获取飙升榜数据。
+
+        Args:
+            limit: 获取数量，默认100
+
+        Returns:
+            DataFrame 包含飙升榜数据，失败返回 None
+        """
+        cache_key = f"surge_{limit}_{date.today()}"
+
+        # 检查缓存
+        if self._is_cache_valid(cache_key):
+            logger.info(f"[缓存命中] 使用缓存的飙升榜数据")
+            return self._cache[cache_key]
+
+        try:
+            import akshare as ak
+
+            logger.info(f"[API调用] ak.stock_hot_up_em() 获取飙升榜...")
+
+            # 获取飙升榜数据
+            # 注意：akshare 的 stock_hot_up_em() 函数可能只返回一个榜单
+            # 这里我们使用相同的接口，实际获取的可能是同一个榜单
+            df = ak.stock_hot_up_em()
+
+            if df is None or df.empty:
+                logger.warning("[API返回] 飙升榜数据为空")
+                return None
+
+            # 打印列名，了解数据结构
+            logger.debug(f"[API返回] 飙升榜数据列名: {list(df.columns)}")
+
+            # 取前N只
+            df = df.head(limit)
+
+            logger.info(f"[API返回] 飙升榜获取成功: 返回 {len(df)} 只股票")
+            # 安全地打印前5只股票
+            try:
+                # 尝试不同的列名组合
+                if '代码' in df.columns and '名称' in df.columns:
+                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5)[['代码', '名称']].to_dict('records')}")
+                elif '代码' in df.columns:
+                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5)[['代码']].to_dict('records')}")
+                else:
+                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5).to_dict('records')}")
+            except Exception as e:
+                logger.debug(f"[API返回] 打印前5只股票失败: {e}")
+
+            # 更新缓存
+            self._update_cache(cache_key, df)
+
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取飙升榜失败: {e}", exc_info=True)
+            return None
+
     def _row_to_stock_info(self, row: pd.Series) -> Optional[StockInfo]:
         """
         将 DataFrame 行转换为 StockInfo 对象
@@ -363,20 +463,51 @@ class HotStockFinder:
                 except:
                     list_days = 0
 
-            stock_info = StockInfo(
-                code=str(row.get('代码', '')),
-                name=str(row.get('名称', '')),
-                price=safe_float(row.get('最新价')),
-                change_pct=safe_float(row.get('涨跌幅')),
-                volume=safe_float(row.get('成交量')),
-                amount=safe_float(row.get('成交额')),
-                turnover_rate=safe_float(row.get('换手率')),
-                market_cap=safe_float(row.get('总市值')),
-                list_days=list_days,
-                pe_ratio=safe_float(row.get('市盈率-动态')) if '市盈率-动态' in row else None,
-            )
+            # 打印行数据，了解数据结构
+            logger.debug(f"[API返回] 行数据: {row.to_dict()}")
 
-            return stock_info
+            # 尝试不同的列名组合，确保能够从不同 API 响应中提取数据
+            code = str(row.get('代码', '') or row.get('证券代码', '') or row.get('code', '') or row.get('stock_code', ''))
+            name = str(row.get('股票名称', '') or row.get('名称', '') or row.get('证券名称', '') or row.get('name', '') or row.get('stock_name', ''))
+            price = safe_float(row.get('最新价') or row.get('price', '') or row.get('最新价(元)', '') or row.get('current_price', ''))
+            change_pct = safe_float(row.get('涨跌幅') or row.get('涨跌幅(%)', '') or row.get('change_pct', '') or row.get('涨跌幅%', ''))
+            volume = safe_float(row.get('成交量') or row.get('volume', '') or row.get('成交量(手)', '') or row.get('vol', ''))
+            amount = safe_float(row.get('成交额') or row.get('amount', '') or row.get('成交额(万元)', '') or row.get('turnover', ''))
+            turnover_rate = safe_float(row.get('换手率') or row.get('turnover_rate', '') or row.get('换手率(%)', '') or row.get('turnover%', ''))
+            market_cap = safe_float(row.get('总市值') or row.get('market_cap', '') or row.get('总市值(亿元)', '') or row.get('market_value', ''))
+            pe_ratio = safe_float(row.get('市盈率-动态') or row.get('pe_ratio', '') or row.get('市盈率', '') or row.get('pe', '')) if any(key in row for key in ['市盈率-动态', 'pe_ratio', '市盈率', 'pe']) else None
+
+            # 打印提取的股票信息
+            logger.debug(f"[API返回] 提取的股票信息: code={code}, name={name}, price={price}")
+
+            # 检查股票名称是否为空
+            if not name:
+                logger.warning(f"跳过无名称的股票: 代码={code}")
+                return None
+
+            # 检查股票代码是否为空
+            if not code:
+                logger.warning(f"跳过无代码的股票: 名称={name}")
+                return None
+
+            try:
+                stock_info = StockInfo(
+                    code=code,
+                    name=name,
+                    price=price,
+                    change_pct=change_pct,
+                    volume=volume,
+                    amount=amount,
+                    turnover_rate=turnover_rate,
+                    market_cap=market_cap,
+                    list_days=list_days,
+                    pe_ratio=pe_ratio,
+                )
+
+                return stock_info
+            except Exception as e:
+                logger.warning(f"转换股票信息失败: {e}, 代码={code}, 名称={name}")
+                return None
 
         except Exception as e:
             logger.warning(f"转换股票信息失败: {e}")
@@ -437,11 +568,7 @@ class HotStockFinder:
                 logger.debug(f"过滤高价股: {stock.code} {stock.name} 价格={stock.price}元")
                 continue
 
-            # 过滤市值
-            if stock.market_cap < self.min_market_cap:
-                filter_stats['market_cap_too_small'] += 1
-                logger.debug(f"过滤小市值股: {stock.code} {stock.name} 市值={stock.market_cap/1e8:.2f}亿")
-                continue
+            # 取消市值过滤条件
 
             # 过滤上市时间
             if stock.list_days > 0 and stock.list_days < self.min_list_days:

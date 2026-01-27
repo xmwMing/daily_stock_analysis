@@ -295,7 +295,14 @@ class DataFetcherManager:
         ]
 
         # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
-        self._fetchers.sort(key=lambda f: f.priority)
+        # 为了确保 Tushare 优先，我们使用一个自定义的排序键
+        def priority_key(fetcher):
+            # 如果是 Tushare 且优先级为 0，给予最高优先级
+            if fetcher.name == "TushareFetcher" and fetcher.priority == 0:
+                return -1
+            return fetcher.priority
+
+        self._fetchers.sort(key=priority_key)
 
         # 构建优先级说明
         priority_info = ", ".join([f"{f.name}(P{f.priority})" for f in self._fetchers])

@@ -20,30 +20,30 @@ logger = logging.getLogger(__name__)
 class RecommendationReport:
     """
     推荐报告生成器
-    
+
     将推荐结果格式化为 Markdown 格式的报告
     """
-    
+
     @staticmethod
     def generate(recommendations: List[Recommendation], report_date: str = None, finder_stats: dict = None) -> str:
         """
         生成推荐报告
-        
+
         Args:
             recommendations: 推荐列表
             report_date: 报告日期（默认今天）
             finder_stats: 热门股票发现器的统计信息
-            
+
         Returns:
             Markdown 格式的报告内容
         """
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
-        
+
         # 处理空推荐列表
         if not recommendations:
             return RecommendationReport._generate_empty_report(report_date, finder_stats)
-        
+
         # 生成完整报告
         report_lines = [
             f"# 🔥 {report_date} 热门股票推荐",
@@ -51,7 +51,7 @@ class RecommendationReport:
             f"> 共推荐 **{len(recommendations)}** 只热门股票",
             "",
         ]
-        
+
         # 添加统计信息
         if finder_stats:
             report_lines.extend([
@@ -59,9 +59,8 @@ class RecommendationReport:
                 "",
                 "| 统计项 | 数量 |",
                 "|--------|------|",
-                f"| 涨幅榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
-                f"| 成交额榜获取 | {finder_stats.get('volume_count', 0)} 只 |",
-                f"| 换手率榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
+                f"| 飙升榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
+                f"| 人气榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
                 f"| 合并去重后 | {finder_stats.get('total_before_filter', 0)} 只 |",
                 f"| 过滤后剩余 | {finder_stats.get('total_after_filter', 0)} 只 |",
                 "",
@@ -73,7 +72,7 @@ class RecommendationReport:
                 "---",
                 "",
             ])
-        
+
         # 逐个股票的推荐卡片
         for i, rec in enumerate(recommendations, 1):
             card = RecommendationReport._format_stock_card(rec, index=i)
@@ -81,7 +80,7 @@ class RecommendationReport:
             report_lines.append("")
             report_lines.append("---")
             report_lines.append("")
-        
+
         # 底部说明
         report_lines.extend([
             "## 📋 说明",
@@ -97,18 +96,18 @@ class RecommendationReport:
             "",
             f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
-        
+
         return "\n".join(report_lines)
-    
+
     @staticmethod
     def _generate_empty_report(report_date: str, finder_stats: dict = None) -> str:
         """
         生成空推荐报告
-        
+
         Args:
             report_date: 报告日期
             finder_stats: 热门股票发现器的统计信息
-            
+
         Returns:
             空报告内容
         """
@@ -118,7 +117,7 @@ class RecommendationReport:
             "> 当前市场无合适推荐",
             "",
         ]
-        
+
         # 添加统计信息
         if finder_stats:
             report_lines.extend([
@@ -126,14 +125,13 @@ class RecommendationReport:
                 "",
                 "| 统计项 | 数量 |",
                 "|--------|------|",
-                f"| 涨幅榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
-                f"| 成交额榜获取 | {finder_stats.get('volume_count', 0)} 只 |",
-                f"| 换手率榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
+                f"| 飙升榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
+                f"| 人气榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
                 f"| 合并去重后 | {finder_stats.get('total_before_filter', 0)} 只 |",
                 f"| 过滤后剩余 | {finder_stats.get('total_after_filter', 0)} 只 |",
                 "",
             ])
-        
+
         report_lines.extend([
             "## 📊 市场状况",
             "",
@@ -152,31 +150,31 @@ class RecommendationReport:
             "",
             f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
-        
+
         return "\n".join(report_lines)
-    
+
     @staticmethod
     def _format_stock_card(rec: Recommendation, index: int) -> str:
         """
         格式化单只股票的推荐卡片
-        
+
         Args:
             rec: 推荐对象
             index: 序号
-            
+
         Returns:
             格式化的卡片内容
         """
         stock = rec.stock_info
         trend = rec.trend_result
-        
+
         # 风险等级 emoji
         risk_emoji = {
             '低': '🟢',
             '中': '🟡',
             '高': '🔴'
         }.get(rec.risk_level, '⚪')
-        
+
         # 分类 emoji
         category_emoji = {
             '强势股': '🚀',
@@ -185,14 +183,14 @@ class RecommendationReport:
             '价值股': '💎',
             '潜力股': '⭐'
         }.get(rec.category, '📊')
-        
+
         lines = [
             f"## {index}. {category_emoji} {stock.name} ({stock.code})",
             "",
             f"**综合评分**: {rec.score:.1f}分 | **分类**: {rec.category} | **风险**: {risk_emoji} {rec.risk_level}",
             "",
         ]
-        
+
         # 推荐理由
         if rec.reason:
             lines.extend([
@@ -201,7 +199,7 @@ class RecommendationReport:
                 rec.reason,
                 "",
             ])
-        
+
         # 基本信息
         lines.extend([
             "### 📊 基本信息",
@@ -215,13 +213,13 @@ class RecommendationReport:
             f"| 换手率 | {stock.turnover_rate:.2f}% |",
             f"| 市值 | {stock.market_cap / 100000000:.2f} 亿元 |",
         ])
-        
+
         # 添加市盈率（如果有）
         if stock.pe_ratio and stock.pe_ratio > 0:
             lines.append(f"| 市盈率 | {stock.pe_ratio:.2f} |")
-        
+
         lines.append("")
-        
+
         # 趋势分析
         if trend:
             lines.extend([
@@ -234,14 +232,14 @@ class RecommendationReport:
                 f"**买入信号**: {trend.buy_signal.value} (评分: {trend.signal_score}分)",
                 "",
             ])
-            
+
             # 信号原因
             if trend.signal_reasons:
                 lines.append("**信号原因**:")
                 for reason in trend.signal_reasons:
                     lines.append(f"- {reason}")
                 lines.append("")
-        
+
         # 风险提示
         if rec.risk_warning:
             lines.extend([
@@ -250,5 +248,5 @@ class RecommendationReport:
                 rec.risk_warning,
                 "",
             ])
-        
+
         return "\n".join(lines)

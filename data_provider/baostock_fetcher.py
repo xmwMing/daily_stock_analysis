@@ -116,20 +116,32 @@ class BaostockFetcher(BaseFetcher):
         - 沪市：sh.600519
         - 深市：sz.000001
         
+        支持的输入格式：
+        - 纯数字：'600519', '000001'
+        - 带市场前缀：'SH600519', 'SZ000001'
+        - 已有后缀：'600519.SH', '000001.SZ'
+        - 已有 Baostock 格式：'sh.600519', 'sz.000001'
+        
         Args:
-            stock_code: 原始代码，如 '600519', '000001'
+            stock_code: 原始代码
             
         Returns:
             Baostock 格式代码，如 'sh.600519', 'sz.000001'
         """
         code = stock_code.strip()
         
-        # 已经包含前缀的情况
+        # 已经是 Baostock 格式的情况
         if code.startswith(('sh.', 'sz.')):
             return code.lower()
         
         # 去除可能的后缀
         code = code.replace('.SH', '').replace('.SZ', '').replace('.sh', '').replace('.sz', '')
+        
+        # 处理带市场前缀的格式，如 'SH600519', 'SZ000001'
+        if code.upper().startswith('SH'):
+            return f"sh.{code[2:]}"
+        elif code.upper().startswith('SZ'):
+            return f"sz.{code[2:]}"
         
         # 根据代码前缀判断市场
         if code.startswith(('600', '601', '603', '688')):

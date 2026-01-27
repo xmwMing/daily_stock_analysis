@@ -179,8 +179,13 @@ class TushareFetcher(BaseFetcher):
         - 沪市：600519.SH
         - 深市：000001.SZ
         
+        支持的输入格式：
+        - 纯数字：'600519', '000001'
+        - 带市场前缀：'SH600519', 'SZ000001'
+        - 已有后缀：'600519.SH', '000001.SZ'
+        
         Args:
-            stock_code: 原始代码，如 '600519', '000001'
+            stock_code: 原始代码
             
         Returns:
             Tushare 格式代码，如 '600519.SH', '000001.SZ'
@@ -190,6 +195,12 @@ class TushareFetcher(BaseFetcher):
         # 已经包含后缀的情况
         if '.' in code:
             return code.upper()
+        
+        # 处理带市场前缀的格式，如 'SH600519', 'SZ000001'
+        if code.upper().startswith('SH'):
+            return f"{code[2:]}.SH"
+        elif code.upper().startswith('SZ'):
+            return f"{code[2:]}.SZ"
         
         # 根据代码前缀判断市场
         # 沪市：600xxx, 601xxx, 603xxx, 688xxx (科创板)

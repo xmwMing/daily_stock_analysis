@@ -407,7 +407,7 @@ class StockRecommender:
         Requirements:
             - 5.1-5.5: 股票分类
         """
-        from stock_analyzer import TrendStatus
+        from src.stock_analyzer import TrendStatus
         
         price = trend_result.current_price
         ma5 = trend_result.ma5
