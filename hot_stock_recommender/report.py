@@ -51,6 +51,15 @@ class RecommendationReport:
             f"> 共推荐 **{len(recommendations)}** 只热门股票",
             "",
         ]
+        
+        # 添加股票列表
+        if recommendations:
+            stock_list_lines = ["> 推荐股票列表:"]
+            for i, rec in enumerate(recommendations, 1):
+                stock = rec.stock_info
+                stock_list_lines.append(f"> {i}. {stock.name} ({stock.code})")
+            stock_list_lines.append("")
+            report_lines.extend(stock_list_lines)
 
         # 添加统计信息
         if finder_stats:
