@@ -192,11 +192,20 @@ class RecommendationReport:
         ]
 
         # 推荐理由
-        if rec.reason:
+        if hasattr(rec, 'reasons') and rec.reasons:
+            reasons_text = rec.reasons if isinstance(rec.reasons, str) else "\n".join(rec.reasons)
             lines.extend([
                 "### 💡 推荐理由",
                 "",
-                rec.reason,
+                reasons_text,
+                "",
+            ])
+        elif hasattr(rec, 'reason') and rec.reason:
+            reason_text = rec.reason if isinstance(rec.reason, str) else "\n".join(rec.reason)
+            lines.extend([
+                "### 💡 推荐理由",
+                "",
+                reason_text,
                 "",
             ])
 
@@ -237,15 +246,30 @@ class RecommendationReport:
             if trend.signal_reasons:
                 lines.append("**信号原因**:")
                 for reason in trend.signal_reasons:
-                    lines.append(f"- {reason}")
+                    # 确保reason是字符串
+                    if isinstance(reason, list):
+                        # 如果reason是列表，将其元素连接为字符串
+                        reason_str = " ".join(str(item) for item in reason)
+                        lines.append(f"- {reason_str}")
+                    else:
+                        lines.append(f"- {str(reason)}")
                 lines.append("")
 
         # 风险提示
-        if rec.risk_warning:
+        if hasattr(rec, 'risk_warnings') and rec.risk_warnings:
+            risk_text = rec.risk_warnings if isinstance(rec.risk_warnings, str) else "\n".join(rec.risk_warnings)
             lines.extend([
                 "### ⚠️ 风险提示",
                 "",
-                rec.risk_warning,
+                risk_text,
+                "",
+            ])
+        elif hasattr(rec, 'risk_warning') and rec.risk_warning:
+            risk_text = rec.risk_warning if isinstance(rec.risk_warning, str) else "\n".join(rec.risk_warning)
+            lines.extend([
+                "### ⚠️ 风险提示",
+                "",
+                risk_text,
                 "",
             ])
 

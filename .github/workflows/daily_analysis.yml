@@ -128,6 +128,9 @@ jobs:
           REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
           MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
+          HOT_STOCKS_ENABLED: ${{ vars.HOT_STOCKS_ENABLED || secrets.HOT_STOCKS_ENABLED || 'true' }}
+          HOT_STOCK_FETCH_COUNT: ${{ vars.HOT_STOCK_FETCH_COUNT || secrets.HOT_STOCK_FETCH_COUNT || '10' }}
+          HOT_STOCK_TOP_N: ${{ vars.HOT_STOCK_TOP_N || secrets.HOT_STOCK_TOP_N || '5' }}
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
 
           # ==========================================
@@ -167,6 +170,11 @@ jobs:
           echo "  飞书: $([ -n "$FEISHU_WEBHOOK_URL" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  Telegram: $([ -n "$TELEGRAM_BOT_TOKEN" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  Discord: $([ -n "$DISCORD_WEBHOOK_URL" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
+          echo ""
+          echo "【热门股票推荐配置】"
+          echo "  功能启用: $([ "$HOT_STOCKS_ENABLED" = 'true' ] && echo '✅ 已启用' || echo '❌ 已禁用')"
+          echo "  每榜获取数量: $HOT_STOCK_FETCH_COUNT"
+          echo "  推荐数量: $HOT_STOCK_TOP_N"
           echo "=========================================="
           echo ""
 

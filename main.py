@@ -260,7 +260,7 @@ def run_full_analysis(
 
         # 3. 运行热门股票推荐（新增）
         hot_stock_report = ""
-        if not args.dry_run:  # 只在非 dry-run 模式下运行
+        if not args.dry_run and config.hot_stocks_enabled:  # 只在非 dry-run 模式下运行，且启用了热门股票推荐
             try:
                 logger.info("开始热门股票推荐...")
                 from hot_stock_recommender import HotStockRecommender
@@ -299,6 +299,8 @@ def run_full_analysis(
                 logger.error(f"热门股票推荐失败: {e}")
                 logger.exception("详细错误信息:")
                 # 推荐失败不影响其他任务
+        elif not config.hot_stocks_enabled:
+            logger.info("热门股票推荐功能已禁用，跳过执行")
 
         # 输出摘要
         if results:
@@ -471,40 +473,43 @@ def main() -> int:
             logger.info("模式: 仅热门股票推荐")
             notifier = NotificationService()
 
-            try:
-                logger.info("开始热门股票推荐...")
-                from hot_stock_recommender import HotStockRecommender
+            if config.hot_stocks_enabled:
+                try:
+                    logger.info("开始热门股票推荐...")
+                    from hot_stock_recommender import HotStockRecommender
 
-                # 创建推荐系统实例
-                hot_recommender = HotStockRecommender()
+                    # 创建推荐系统实例
+                    hot_recommender = HotStockRecommender()
 
-                # 执行推荐流程
-                hot_stock_report = hot_recommender.run()
+                    # 执行推荐流程
+                    hot_stock_report = hot_recommender.run()
 
-                # 保存推荐报告到文件
-                if hot_stock_report:
-                    date_str = datetime.now().strftime('%Y%m%d')
-                    report_filename = f"hot_stock_recommendations_{date_str}.md"
-                    filepath = notifier.save_report_to_file(
-                        hot_stock_report,
-                        report_filename
-                    )
-                    logger.info(f"热门股票推荐报告已保存: {filepath}")
+                    # 保存推荐报告到文件
+                    if hot_stock_report:
+                        date_str = datetime.now().strftime('%Y%m%d')
+                        report_filename = f"hot_stock_recommendations_{date_str}.md"
+                        filepath = notifier.save_report_to_file(
+                            hot_stock_report,
+                            report_filename
+                        )
+                        logger.info(f"热门股票推荐报告已保存: {filepath}")
 
-                    # 推送通知（如果启用）
-                    if not args.no_notify and notifier.is_available():
-                        # 添加标题
-                        report_content = f"# 🔥 热门股票推荐\n\n{hot_stock_report}"
-                        success = notifier.send(report_content)
-                        if success:
-                            logger.info("热门股票推荐推送成功")
-                        else:
-                            logger.warning("热门股票推荐推送失败")
+                        # 推送通知（如果启用）
+                        if not args.no_notify and notifier.is_available():
+                            # 添加标题
+                            report_content = f"# 🔥 热门股票推荐\n\n{hot_stock_report}"
+                            success = notifier.send(report_content)
+                            if success:
+                                logger.info("热门股票推荐推送成功")
+                            else:
+                                logger.warning("热门股票推荐推送失败")
 
-            except Exception as e:
-                logger.error(f"热门股票推荐失败: {e}")
-                import traceback
-                traceback.print_exc()
+                except Exception as e:
+                    logger.error(f"热门股票推荐失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                logger.info("热门股票推荐功能已禁用，跳过执行")
 
             return 0
 
