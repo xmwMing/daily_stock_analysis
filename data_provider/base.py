@@ -19,7 +19,7 @@ import random
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 import pandas as pd
 import numpy as np
@@ -265,6 +265,7 @@ class DataFetcherManager:
         - 否则按默认优先级：
           0. EfinanceFetcher (Priority 0) - 最高优先级
           1. AkshareFetcher (Priority 1)
+          2. PytdxFetcher (Priority 2) - 通达信
           2. TushareFetcher (Priority 2)
           3. BaostockFetcher (Priority 3)
           4. YfinanceFetcher (Priority 4)
@@ -272,6 +273,7 @@ class DataFetcherManager:
         from .efinance_fetcher import EfinanceFetcher
         from .akshare_fetcher import AkshareFetcher
         from .tushare_fetcher import TushareFetcher
+        from .pytdx_fetcher import PytdxFetcher
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from src.config import get_config
@@ -282,6 +284,7 @@ class DataFetcherManager:
         efinance = EfinanceFetcher()
         akshare = AkshareFetcher()
         tushare = TushareFetcher()  # 会根据 Token 配置自动调整优先级
+        pytdx = PytdxFetcher()      # 通达信数据源
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
 
@@ -290,6 +293,7 @@ class DataFetcherManager:
             efinance,
             akshare,
             tushare,
+            pytdx,
             baostock,
             yfinance,
         ]
@@ -584,3 +588,112 @@ class DataFetcherManager:
             logger.error(f"[筹码分布] 获取 {stock_code} 失败: {e}")
             circuit_breaker.record_failure("akshare_chip", str(e))
             return None
+
+    def get_stock_name(self, stock_code: str) -> Optional[str]:
+        """
+        获取股票中文名称（自动切换数据源）
+        
+        尝试从多个数据源获取股票名称：
+        1. 先从实时行情缓存中获取（如果有）
+        2. 依次尝试各个数据源的 get_stock_name 方法
+        3. 最后尝试让大模型通过搜索获取（需要外部调用）
+        
+        Args:
+            stock_code: 股票代码
+            
+        Returns:
+            股票中文名称，所有数据源都失败则返回 None
+        """
+        # 1. 先检查缓存
+        if hasattr(self, '_stock_name_cache') and stock_code in self._stock_name_cache:
+            return self._stock_name_cache[stock_code]
+        
+        # 初始化缓存
+        if not hasattr(self, '_stock_name_cache'):
+            self._stock_name_cache = {}
+        
+        # 2. 尝试从实时行情中获取（最快）
+        quote = self.get_realtime_quote(stock_code)
+        if quote and hasattr(quote, 'name') and quote.name:
+            name = quote.name
+            self._stock_name_cache[stock_code] = name
+            logger.info(f"[股票名称] 从实时行情获取: {stock_code} -> {name}")
+            return name
+        
+        # 3. 依次尝试各个数据源
+        for fetcher in self._fetchers:
+            if hasattr(fetcher, 'get_stock_name'):
+                try:
+                    name = fetcher.get_stock_name(stock_code)
+                    if name:
+                        self._stock_name_cache[stock_code] = name
+                        logger.info(f"[股票名称] 从 {fetcher.name} 获取: {stock_code} -> {name}")
+                        return name
+                except Exception as e:
+                    logger.debug(f"[股票名称] {fetcher.name} 获取失败: {e}")
+                    continue
+        
+        # 4. 所有数据源都失败
+        logger.warning(f"[股票名称] 所有数据源都无法获取 {stock_code} 的名称")
+        return None
+
+    def batch_get_stock_names(self, stock_codes: List[str]) -> Dict[str, str]:
+        """
+        批量获取股票中文名称
+        
+        先尝试从支持批量查询的数据源获取股票列表，
+        然后再逐个查询缺失的股票名称。
+        
+        Args:
+            stock_codes: 股票代码列表
+            
+        Returns:
+            {股票代码: 股票名称} 字典
+        """
+        result = {}
+        missing_codes = set(stock_codes)
+        
+        # 1. 先检查缓存
+        if not hasattr(self, '_stock_name_cache'):
+            self._stock_name_cache = {}
+        
+        for code in stock_codes:
+            if code in self._stock_name_cache:
+                result[code] = self._stock_name_cache[code]
+                missing_codes.discard(code)
+        
+        if not missing_codes:
+            return result
+        
+        # 2. 尝试批量获取股票列表
+        for fetcher in self._fetchers:
+            if hasattr(fetcher, 'get_stock_list') and missing_codes:
+                try:
+                    stock_list = fetcher.get_stock_list()
+                    if stock_list is not None and not stock_list.empty:
+                        for _, row in stock_list.iterrows():
+                            code = row.get('code')
+                            name = row.get('name')
+                            if code and name:
+                                self._stock_name_cache[code] = name
+                                if code in missing_codes:
+                                    result[code] = name
+                                    missing_codes.discard(code)
+                        
+                        if not missing_codes:
+                            break
+                        
+                        logger.info(f"[股票名称] 从 {fetcher.name} 批量获取完成，剩余 {len(missing_codes)} 个待查")
+                except Exception as e:
+                    logger.debug(f"[股票名称] {fetcher.name} 批量获取失败: {e}")
+                    continue
+        
+        # 3. 逐个获取剩余的
+        for code in list(missing_codes):
+            name = self.get_stock_name(code)
+            if name:
+                result[code] = name
+                missing_codes.discard(code)
+        
+        logger.info(f"[股票名称] 批量获取完成，成功 {len(result)}/{len(stock_codes)}")
+        return result

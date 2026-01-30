@@ -29,6 +29,7 @@ COPY *.py ./
 COPY data_provider/ ./data_provider/
 COPY web/ ./web/
 COPY bot/ ./bot/
+COPY src/ ./src/
 
 # 创建数据目录
 RUN mkdir -p /app/data /app/logs /app/reports

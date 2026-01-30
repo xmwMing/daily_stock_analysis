@@ -243,6 +243,93 @@ class BaostockFetcher(BaseFetcher):
         
         return df
 
+    def get_stock_name(self, stock_code: str) -> Optional[str]:
+        """
+        获取股票名称
+        
+        使用 Baostock 的 query_stock_basic 接口获取股票基本信息
+        
+        Args:
+            stock_code: 股票代码
+            
+        Returns:
+            股票名称，失败返回 None
+        """
+        # 检查缓存
+        if hasattr(self, '_stock_name_cache') and stock_code in self._stock_name_cache:
+            return self._stock_name_cache[stock_code]
+        
+        # 初始化缓存
+        if not hasattr(self, '_stock_name_cache'):
+            self._stock_name_cache = {}
+        
+        try:
+            bs_code = self._convert_stock_code(stock_code)
+            
+            with self._baostock_session() as bs:
+                # 查询股票基本信息
+                rs = bs.query_stock_basic(code=bs_code)
+                
+                if rs.error_code == '0':
+                    data_list = []
+                    while rs.next():
+                        data_list.append(rs.get_row_data())
+                    
+                    if data_list:
+                        # Baostock 返回的字段：code, code_name, ipoDate, outDate, type, status
+                        fields = rs.fields
+                        name_idx = fields.index('code_name') if 'code_name' in fields else None
+                        if name_idx is not None and len(data_list[0]) > name_idx:
+                            name = data_list[0][name_idx]
+                            self._stock_name_cache[stock_code] = name
+                            logger.debug(f"Baostock 获取股票名称成功: {stock_code} -> {name}")
+                            return name
+                
+        except Exception as e:
+            logger.warning(f"Baostock 获取股票名称失败 {stock_code}: {e}")
+        
+        return None
+    
+    def get_stock_list(self) -> Optional[pd.DataFrame]:
+        """
+        获取股票列表
+        
+        使用 Baostock 的 query_stock_basic 接口获取全部股票列表
+        
+        Returns:
+            包含 code, name 列的 DataFrame，失败返回 None
+        """
+        try:
+            with self._baostock_session() as bs:
+                # 查询所有股票基本信息
+                rs = bs.query_stock_basic()
+                
+                if rs.error_code == '0':
+                    data_list = []
+                    while rs.next():
+                        data_list.append(rs.get_row_data())
+                    
+                    if data_list:
+                        df = pd.DataFrame(data_list, columns=rs.fields)
+                        
+                        # 转换代码格式（去除 sh. 或 sz. 前缀）
+                        df['code'] = df['code'].apply(lambda x: x.split('.')[1] if '.' in x else x)
+                        df = df.rename(columns={'code_name': 'name'})
+                        
+                        # 更新缓存
+                        if not hasattr(self, '_stock_name_cache'):
+                            self._stock_name_cache = {}
+                        for _, row in df.iterrows():
+                            self._stock_name_cache[row['code']] = row['name']
+                        
+                        logger.info(f"Baostock 获取股票列表成功: {len(df)} 条")
+                        return df[['code', 'name']]
+                
+        except Exception as e:
+            logger.warning(f"Baostock 获取股票列表失败: {e}")
+        
+        return None
+
 
 if __name__ == "__main__":
     # 测试代码
@@ -251,8 +338,14 @@ if __name__ == "__main__":
     fetcher = BaostockFetcher()
     
     try:
+        # 测试历史数据
         df = fetcher.get_daily_data('600519')  # 茅台
         print(f"获取成功，共 {len(df)} 条数据")
         print(df.tail())
+        
+        # 测试股票名称
+        name = fetcher.get_stock_name('600519')
+        print(f"股票名称: {name}")
+        
     except Exception as e:
         print(f"获取失败: {e}")

@@ -1,3 +1,5 @@
+<div align="center">
+
 # 📈 股票智能分析系统
 
 [![GitHub stars](https://img.shields.io/github/stars/ZhuLinsen/daily_stock_analysis?style=social)](https://github.com/ZhuLinsen/daily_stock_analysis/stargazers)
@@ -8,9 +10,20 @@
 
 > 🤖 基于 AI 大模型的 A股/港股/美股自选股智能分析系统，每日自动分析并推送「决策仪表盘」到企业微信/飞书/Telegram/邮箱
 
-[English](docs/README_EN.md) | 简体中文
+[**功能特性**](#-功能特性) • [**部署指南**](docs/DEPLOY.md) • [**推送效果**](#-推送效果) • [**使用指南**](docs/full-guide.md) • [**更新日志**](docs/CHANGELOG.md)
 
-![运行效果演示](./sources/all_2026-01-13_221547.gif)
+[English](docs/README_EN.md) | 简体中文 | [繁體中文](docs/README_CHT.md)
+
+</div>
+
+## 💖 赞助商 (Sponsors)
+<div align="center">
+  <a href="https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis" target="_blank">
+    <img src="./sources/serpapi_banner_zh.png" alt="轻松抓取搜索引擎上的实时金融新闻数据 - SerpApi" height="160">
+  </a>
+</div>
+<br>
+
 
 ## ✨ 功能特性
 
@@ -24,7 +37,7 @@
 - **🔄 多模型支持** - 支持 OpenAI 兼容 API（DeepSeek、通义千问等）作为备选
 
 ### 📊 数据来源
-- **行情数据**: AkShare（免费）、Tushare、Baostock、YFinance
+- **行情数据**: AkShare（免费）、Tushare、Pytdx（通达信）、Baostock、YFinance
 - **新闻搜索**: Tavily、SerpAPI、Bocha
 - **AI 分析**: 
   - 主力：Google Gemini（gemini-3-flash-preview）—— [免费获取](https://aistudio.google.com/)
@@ -90,7 +103,7 @@
 | `STOCK_LIST` | 自选股代码，如 `600519,hk00700,AAPL,TSLA` | ✅ |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 推荐 |
 | `BOCHA_API_KEYS` | [博查搜索](https://open.bocha.cn/) Web Search API（中文搜索优化，支持AI摘要，多个key用逗号分隔） | 可选 |
-| `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/) 备用搜索 | 可选 |
+| `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis) 备用搜索 | 可选 |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/) Token | 可选 |
 
 #### 3. 启用 Actions
@@ -110,6 +123,8 @@
 > 📖 本地运行、Docker 部署详细步骤请参考 [完整配置指南](docs/full-guide.md)
 
 ## 📱 推送效果
+
+![运行效果演示](./sources/all_2026-01-13_221547.gif)
 
 ### 决策仪表盘
 ```
@@ -227,6 +242,7 @@ daily_stock_analysis/
 ### 📊 数据源扩展
 - [x] AkShare（免费）
 - [x] Tushare Pro
+- [x] Pytdx（通达信）
 - [x] Baostock
 - [x] YFinance
 

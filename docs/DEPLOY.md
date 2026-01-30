@@ -46,34 +46,34 @@ vim .env  # 填入真实的 API Key 等配置
 
 ```bash
 # 构建并启动
-docker-compose up -d
+docker-compose -f ./docker/docker-compose.yml up -d
 
 # 查看日志
-docker-compose logs -f
+docker-compose -f ./docker/docker-compose.yml logs -f
 
 # 查看运行状态
-docker-compose ps
+docker-compose -f ./docker/docker-compose.yml ps
 ```
 
 ### 4. 常用管理命令
 
 ```bash
 # 停止服务
-docker-compose down
+docker-compose -f ./docker/docker-compose.yml down
 
 # 重启服务
-docker-compose restart
+docker-compose -f ./docker/docker-compose.yml restart
 
 # 更新代码后重新部署
 git pull
-docker-compose build --no-cache
-docker-compose up -d
+docker-compose -f ./docker/docker-compose.yml build --no-cache
+docker-compose -f ./docker/docker-compose.yml up -d
 
 # 进入容器调试
-docker-compose exec stock-analyzer bash
+docker-compose -f ./docker/docker-compose.yml exec stock-analyzer bash
 
 # 手动执行一次分析
-docker-compose exec stock-analyzer python main.py --no-notify
+docker-compose -f ./docker/docker-compose.yml exec stock-analyzer python main.py --no-notify
 ```
 
 ### 5. 数据持久化
@@ -228,7 +228,7 @@ os.environ["https_proxy"] = "http://your-proxy:port"
 
 ```bash
 # Docker 方式
-docker-compose logs -f --tail=100
+docker-compose -f ./docker/docker-compose.yml logs -f --tail=100
 
 # 直接部署
 tail -f /opt/stock-analyzer/logs/stock_analysis_*.log
@@ -262,7 +262,7 @@ find /opt/stock-analyzer/reports -mtime +30 -delete
 
 ```bash
 # 清理缓存重新构建
-docker-compose build --no-cache
+docker-compose -f ./docker/docker-compose.yml build --no-cache
 ```
 
 ### 2. API 访问超时
@@ -302,7 +302,7 @@ mkdir -p /opt/stock-analyzer
 cd /opt/stock-analyzer
 git clone <your-repo-url> .
 tar -xzvf stock-analyzer-backup.tar.gz
-docker-compose up -d
+docker-compose -f ./docker/docker-compose.yml up -d
 ```
 
 ---

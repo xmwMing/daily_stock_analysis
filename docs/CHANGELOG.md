@@ -5,6 +5,29 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [2.1.6] - 2026-01-29
+
+### Added
+- 📡 **Pytdx Data Source (Priority 2)**
+  - New free data source via Tongdaxin (通达信) servers
+  - No registration or token required
+  - Multi-server automatic failover
+  - Supports real-time quotes and historical data
+- 🏷️ **Multi-source Stock Name Resolution**
+  - `get_stock_name()` method in DataFetcherManager
+  - `batch_get_stock_names()` for bulk queries
+  - Automatic fallback across data sources
+  - Added stock name/list methods to Tushare and Baostock fetchers
+- 🔍 **Enhanced Search Fallback**
+  - `search_stock_price_fallback()` for when all data sources fail
+  - New search dimensions: market analysis, industry analysis
+  - Increased max searches from 3 to 5
+  - Improved search result formatting (4 results per dimension)
+
+### Changed
+- Updated search query templates for better relevance
+- Enhanced `format_intel_report()` output structure
+
 ## [2.1.0] - 2026-01-25
 
 ### 新增

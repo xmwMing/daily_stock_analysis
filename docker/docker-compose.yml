@@ -3,27 +3,27 @@
 # ===================================
 # 
 # 使用方式:
-#   定时模式: docker-compose up -d
-#   WebUI模式: docker-compose up -d webui
-#   同时启动: docker-compose up -d analyzer webui
+#   定时模式: docker-compose -f ./docker/docker-compose.yml up -d
+#   WebUI模式: docker-compose -f ./docker/docker-compose.yml up -d webui
+#   同时启动: docker-compose -f ./docker/docker-compose.yml up -d analyzer webui
 
 version: '3.8'
 
 x-common: &common
   build:
-    context: .
-    dockerfile: Dockerfile
+    context: ..
+    dockerfile: docker/Dockerfile
   restart: unless-stopped
 
   # 环境变量（从 .env 文件加载）
   env_file:
-    - .env
+    - ../.env
 
   volumes:
-    - ./data:/app/data
-    - ./logs:/app/logs
-    - ./reports:/app/reports
-    - ./.env:/app/.env
+    - ../data:/app/data
+    - ../logs:/app/logs
+    - ../reports:/app/reports
+    - ../.env:/app/.env
 
   environment:
     - TZ=Asia/Shanghai

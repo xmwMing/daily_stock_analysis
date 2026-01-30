@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any, List
 
 import akshare as ak
 import pandas as pd
+import yfinance as yf
 
 from src.config import get_config
 from src.search_service import SearchService
@@ -183,12 +184,75 @@ class MarketAnalyzer:
                         if index.prev_close > 0:
                             index.amplitude = (index.high - index.low) / index.prev_close * 100
                         indices.append(index)
-                        
-                logger.info(f"[大盘] 获取到 {len(indices)} 个指数行情")
-                
+
+            # 如果 akshare 获取失败或为空，尝试使用 yfinance 兜底
+            if not indices:
+                logger.warning("[大盘] 国内源获取失败，尝试使用 Yfinance 兜底...")
+                indices = self._get_indices_from_yfinance()
+
+            logger.info(f"[大盘] 获取到 {len(indices)} 个指数行情")
+
         except Exception as e:
             logger.error(f"[大盘] 获取指数行情失败: {e}")
-        
+            # 异常时也尝试兜底
+            if not indices:
+                indices = self._get_indices_from_yfinance()
+
+        return indices
+
+    def _get_indices_from_yfinance(self) -> List[MarketIndex]:
+        """从 Yahoo Finance 获取指数行情（兜底方案）"""
+        indices = []
+        # 映射关系：akshare代码 -> yfinance代码
+        yf_mapping = {
+            'sh000001': ('000001.SS', '上证指数'),
+            'sz399001': ('399001.SZ', '深证成指'),
+            'sz399006': ('399006.SZ', '创业板指'),
+            'sh000688': ('000688.SS', '科创50'),
+            'sh000016': ('000016.SS', '上证50'),
+            'sh000300': ('000300.SS', '沪深300'),
+        }
+
+        try:
+            for ak_code, (yf_code, name) in yf_mapping.items():
+                if ak_code not in self.MAIN_INDICES:
+                    continue
+
+                ticker = yf.Ticker(yf_code)
+                try:
+                    hist = ticker.history(period='2d')
+                    if hist.empty:
+                        continue
+
+                    today = hist.iloc[-1]
+                    prev = hist.iloc[-2] if len(hist) > 1 else today
+
+                    price = float(today['Close'])
+                    prev_close = float(prev['Close'])
+                    change = price - prev_close
+                    change_pct = (change / prev_close) * 100 if prev_close else 0
+
+                    index = MarketIndex(
+                        code=ak_code,
+                        name=name,
+                        current=price,
+                        change=change,
+                        change_pct=change_pct,
+                        open=float(today['Open']),
+                        high=float(today['High']),
+                        low=float(today['Low']),
+                        prev_close=prev_close,
+                        volume=float(today['Volume']),
+                        amount=0.0
+                    )
+                    indices.append(index)
+                    logger.info(f"[大盘] Yfinance 成功获取: {name}")
+                except Exception as e:
+                    logger.debug(f"[大盘] Yfinance 获取 {name} 失败: {e}")
+
+        except Exception as e:
+            logger.error(f"[大盘] Yfinance 兜底失败: {e}")
+
         return indices
     
     def _get_market_statistics(self, overview: MarketOverview):
@@ -413,7 +477,7 @@ class MarketAnalyzer:
 {overview.date}
 
 ## 主要指数
-{indices_text}
+{indices_text if indices_text else "暂无指数数据（接口异常）"}
 
 ## 市场概况
 - 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
@@ -422,11 +486,13 @@ class MarketAnalyzer:
 - 北向资金: {overview.north_flow:+.2f} 亿元
 
 ## 板块表现
-领涨: {top_sectors_text}
-领跌: {bottom_sectors_text}
+领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
+领跌: {bottom_sectors_text if bottom_sectors_text else "暂无数据"}
 
 ## 市场新闻
 {news_text if news_text else "暂无相关新闻"}
+
+{"注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。" if not indices_text else ""}
 
 ---
 

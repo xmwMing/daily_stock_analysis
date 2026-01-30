@@ -270,7 +270,7 @@ class SerpAPISearchProvider(BaseSearchProvider):
     - 免费版每月 100 次请求
     - 返回真实的搜索结果
     
-    文档：https://serpapi.com/
+    文档：https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis
     """
     
     def __init__(self, api_keys: List[str]):
@@ -538,7 +538,17 @@ class SearchService:
     1. 管理多个搜索引擎
     2. 自动故障转移
     3. 结果聚合和格式化
+    4. 数据源失败时的增强搜索（股价、走势等）
     """
+    
+    # 增强搜索关键词模板
+    ENHANCED_SEARCH_KEYWORDS = [
+        "{name} 股票 今日 股价",
+        "{name} {code} 最新 行情 走势",
+        "{name} 股票 分析 走势图",
+        "{name} K线 技术分析",
+        "{name} {code} 涨跌 成交量",
+    ]
     
     def __init__(
         self,
@@ -712,18 +722,28 @@ class SearchService:
         search_dimensions = [
             {
                 'name': 'latest_news',
-                'query': f"{stock_name} {stock_code} 最新 新闻 2026年1月",
+                'query': f"{stock_name} {stock_code} 最新 新闻 重大 事件",
                 'desc': '最新消息'
             },
             {
+                'name': 'market_analysis',
+                'query': f"{stock_name} 研报 目标价 评级 深度分析",
+                'desc': '机构分析'
+            },
+            {
                 'name': 'risk_check', 
-                'query': f"{stock_name} 减持 处罚 利空 风险",
+                'query': f"{stock_name} 减持 处罚 违规 诉讼 利空 风险",
                 'desc': '风险排查'
             },
             {
                 'name': 'earnings',
-                'query': f"{stock_name} 年报预告 业绩预告 业绩快报 2025年报",
+                'query': f"{stock_name} 业绩预告 财报 营收 净利润 同比增长",
                 'desc': '业绩预期'
+            },
+            {
+                'name': 'industry',
+                'query': f"{stock_name} 所在行业 竞争对手 市场份额 行业前景",
+                'desc': '行业分析'
             },
         ]
         
@@ -773,39 +793,34 @@ class SearchService:
         """
         lines = [f"【{stock_name} 情报搜索结果】"]
         
-        # 最新消息
-        if 'latest_news' in intel_results:
-            resp = intel_results['latest_news']
-            lines.append(f"\n📰 最新消息 (来源: {resp.provider}):")
+        # 维度展示顺序
+        display_order = ['latest_news', 'market_analysis', 'risk_check', 'earnings', 'industry']
+        
+        for dim_name in display_order:
+            if dim_name not in intel_results:
+                continue
+                
+            resp = intel_results[dim_name]
+            
+            # 获取维度描述
+            dim_desc = dim_name
+            if dim_name == 'latest_news': dim_desc = '📰 最新消息'
+            elif dim_name == 'market_analysis': dim_desc = '📈 机构分析'
+            elif dim_name == 'risk_check': dim_desc = '⚠️ 风险排查'
+            elif dim_name == 'earnings': dim_desc = '📊 业绩预期'
+            elif dim_name == 'industry': dim_desc = '🏭 行业分析'
+            
+            lines.append(f"\n{dim_desc} (来源: {resp.provider}):")
             if resp.success and resp.results:
-                for i, r in enumerate(resp.results[:3], 1):
+                # 增加显示条数
+                for i, r in enumerate(resp.results[:4], 1):
                     date_str = f" [{r.published_date}]" if r.published_date else ""
                     lines.append(f"  {i}. {r.title}{date_str}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    # 如果摘要太短，可能信息量不足
+                    snippet = r.snippet[:150] if len(r.snippet) > 20 else r.snippet
+                    lines.append(f"     {snippet}...")
             else:
-                lines.append("  未找到相关消息")
-        
-        # 风险排查
-        if 'risk_check' in intel_results:
-            resp = intel_results['risk_check']
-            lines.append(f"\n⚠️ 风险排查 (来源: {resp.provider}):")
-            if resp.success and resp.results:
-                for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
-            else:
-                lines.append("  未发现明显风险信号")
-        
-        # 业绩预期
-        if 'earnings' in intel_results:
-            resp = intel_results['earnings']
-            lines.append(f"\n📊 业绩预期 (来源: {resp.provider}):")
-            if resp.success and resp.results:
-                for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
-            else:
-                lines.append("  未找到业绩相关信息")
+                lines.append("  未找到相关信息")
         
         return "\n".join(lines)
     
@@ -816,15 +831,15 @@ class SearchService:
         delay_between: float = 1.0
     ) -> Dict[str, SearchResponse]:
         """
-        批量搜索多只股票新闻
+        Batch search news for multiple stocks.
         
         Args:
-            stocks: 股票列表 [{"code": "300389", "name": "艾比森"}, ...]
-            max_results_per_stock: 每只股票的最大结果数
-            delay_between: 每次搜索之间的延迟（秒）
+            stocks: List of stocks
+            max_results_per_stock: Max results per stock
+            delay_between: Delay between searches (seconds)
             
         Returns:
-            {股票代码: SearchResponse} 字典
+            Dict of results
         """
         results = {}
         
@@ -839,6 +854,180 @@ class SearchService:
             results[code] = response
         
         return results
+
+    def search_stock_price_fallback(
+        self,
+        stock_code: str,
+        stock_name: str,
+        max_attempts: int = 3,
+        max_results: int = 5
+    ) -> SearchResponse:
+        """
+        Enhance search when data sources fail.
+        
+        When all data sources (efinance, akshare, tushare, baostock, etc.) fail to get
+        stock data, use search engines to find stock trends and price info as supplemental data for AI analysis.
+        
+        Strategy:
+        1. Search using multiple keyword templates
+        2. Try all available search engines for each keyword
+        3. Aggregate and deduplicate results
+        
+        Args:
+            stock_code: Stock Code
+            stock_name: Stock Name
+            max_attempts: Max search attempts (using different keywords)
+            max_results: Max results to return
+            
+        Returns:
+            SearchResponse object with aggregated results
+        """
+
+        if not self.is_available:
+            return SearchResponse(
+                query=f"{stock_name} 股价走势",
+                results=[],
+                provider="None",
+                success=False,
+                error_message="未配置搜索引擎 API Key"
+            )
+        
+        logger.info(f"[增强搜索] 数据源失败，启动增强搜索: {stock_name}({stock_code})")
+        
+        all_results = []
+        seen_urls = set()
+        successful_providers = []
+        
+        # 使用多个关键词模板搜索
+        for i, keyword_template in enumerate(self.ENHANCED_SEARCH_KEYWORDS[:max_attempts]):
+            query = keyword_template.format(name=stock_name, code=stock_code)
+            
+            logger.info(f"[增强搜索] 第 {i+1}/{max_attempts} 次搜索: {query}")
+            
+            # 依次尝试各个搜索引擎
+            for provider in self._providers:
+                if not provider.is_available:
+                    continue
+                
+                try:
+                    response = provider.search(query, max_results=3)
+                    
+                    if response.success and response.results:
+                        # 去重并添加结果
+                        for result in response.results:
+                            if result.url not in seen_urls:
+                                seen_urls.add(result.url)
+                                all_results.append(result)
+                                
+                        if provider.name not in successful_providers:
+                            successful_providers.append(provider.name)
+                        
+                        logger.info(f"[增强搜索] {provider.name} 返回 {len(response.results)} 条结果")
+                        break  # 成功后跳到下一个关键词
+                    else:
+                        logger.debug(f"[增强搜索] {provider.name} 无结果或失败")
+                        
+                except Exception as e:
+                    logger.warning(f"[增强搜索] {provider.name} 搜索异常: {e}")
+                    continue
+            
+            # 短暂延迟避免请求过快
+            if i < max_attempts - 1:
+                time.sleep(0.5)
+        
+        # 汇总结果
+        if all_results:
+            # 截取前 max_results 条
+            final_results = all_results[:max_results]
+            provider_str = ", ".join(successful_providers) if successful_providers else "None"
+            
+            logger.info(f"[增强搜索] 完成，共获取 {len(final_results)} 条结果（来源: {provider_str}）")
+            
+            return SearchResponse(
+                query=f"{stock_name}({stock_code}) 股价走势",
+                results=final_results,
+                provider=provider_str,
+                success=True,
+            )
+        else:
+            logger.warning(f"[增强搜索] 所有搜索均未返回结果")
+            return SearchResponse(
+                query=f"{stock_name}({stock_code}) 股价走势",
+                results=[],
+                provider="None",
+                success=False,
+                error_message="增强搜索未找到相关信息"
+            )
+
+    def search_stock_with_enhanced_fallback(
+        self,
+        stock_code: str,
+        stock_name: str,
+        include_news: bool = True,
+        include_price: bool = False,
+        max_results: int = 5
+    ) -> Dict[str, SearchResponse]:
+        """
+        综合搜索接口（支持新闻和股价信息）
+        
+        当 include_price=True 时，会同时搜索新闻和股价信息。
+        主要用于数据源完全失败时的兜底方案。
+        
+        Args:
+            stock_code: 股票代码
+            stock_name: 股票名称
+            include_news: 是否搜索新闻
+            include_price: 是否搜索股价/走势信息
+            max_results: 每类搜索的最大结果数
+            
+        Returns:
+            {'news': SearchResponse, 'price': SearchResponse} 字典
+        """
+        results = {}
+        
+        if include_news:
+            results['news'] = self.search_stock_news(
+                stock_code, 
+                stock_name, 
+                max_results=max_results
+            )
+        
+        if include_price:
+            results['price'] = self.search_stock_price_fallback(
+                stock_code,
+                stock_name,
+                max_attempts=3,
+                max_results=max_results
+            )
+        
+        return results
+
+    def format_price_search_context(self, response: SearchResponse) -> str:
+        """
+        将股价搜索结果格式化为 AI 分析上下文
+        
+        Args:
+            response: 搜索响应对象
+            
+        Returns:
+            格式化的文本，可直接用于 AI 分析
+        """
+        if not response.success or not response.results:
+            return "【股价走势搜索】未找到相关信息，请以其他渠道数据为准。"
+        
+        lines = [
+            f"【股价走势搜索结果】（来源: {response.provider}）",
+            "⚠️ 注意：以下信息来自网络搜索，仅供参考，可能存在延迟或不准确。",
+            ""
+        ]
+        
+        for i, result in enumerate(response.results, 1):
+            date_str = f" [{result.published_date}]" if result.published_date else ""
+            lines.append(f"{i}. 【{result.source}】{result.title}{date_str}")
+            lines.append(f"   {result.snippet[:200]}...")
+            lines.append("")
+        
+        return "\n".join(lines)
 
 
 # === 便捷函数 ===
