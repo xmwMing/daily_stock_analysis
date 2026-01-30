@@ -219,18 +219,17 @@ class RecommendationReport:
             ])
 
         # 基本信息
-        lines.extend([
-            "### 📊 基本信息",
-            "",
-            "| 指标 | 数值 |",
-            "|------|------|",
-            f"| 当前价 | {stock.price:.2f} 元 |",
-            f"| 涨跌幅 | {stock.change_pct:+.2f}% |",
-            f"| 成交量 | {stock.volume / 10000:.2f} 万手 |",
-            f"| 成交额 | {stock.amount / 100000000:.2f} 亿元 |",
-            f"| 换手率 | {stock.turnover_rate:.2f}% |",
-            f"| 市值 | {stock.market_cap / 100000000:.2f} 亿元 |",
-        ])
+            lines.extend([
+                "### 📊 基本信息",
+                "",
+                "| 指标 | 数值 |",
+                "|------|------|",
+                f"| 当前价 | {stock.price:.2f} 元 |",
+                f"| 涨跌幅 | {stock.change_pct:+.2f}% |",
+                f"| 成交量 | {stock.volume / 10000:.2f} 万手 |",
+                f"| 成交额 | {stock.amount / 100000000:.2f} 亿元 |",
+                f"| 换手率 | {stock.turnover_rate:.2f}% |",
+            ])
 
         # 添加市盈率（如果有）
         if stock.pe_ratio and stock.pe_ratio > 0:

@@ -770,18 +770,18 @@ class AkshareFetcher(BaseFetcher):
 
             circuit_breaker.record_success(source_key)
 
-            # 腾讯数据字段顺序（部分）：
-            # 1:名称 2:代码 3:最新价 4:昨收 5:今开 6:成交量(手) 7:外盘 8:内盘
-            # 9:买一价 10:买一量 ... 30:最高 31:最低 32:涨跌幅(%) 33:涨跌额
-            # 38:换手率(%) 39:市盈率 44:振幅
+            # 腾讯数据字段顺序（基于实际测试）：
+            # 0: 未知 1: 名称 2: 代码 3: 最新价 4: 昨收 5: 今开 6: 成交量(手) 7: 外盘 8: 内盘
+            # 9: 买一价 ... 30: 涨跌额 31: 涨跌幅(%) 33: 最高 34: 最低
+            # 38: 换手率(%) 39: 市盈率 43: 振幅
             # 使用 realtime_types.py 中的统一转换函数
             quote = UnifiedRealtimeQuote(
                 code=stock_code,
                 name=fields[1] if len(fields) > 1 else "",
                 source=RealtimeSource.TENCENT,
                 price=safe_float(fields[3]),
-                change_pct=safe_float(fields[32]),
-                change_amount=safe_float(fields[31]) if len(fields) > 31 else None,
+                change_pct=safe_float(fields[31]),
+                change_amount=safe_float(fields[30]) if len(fields) > 30 else None,
                 volume=safe_int(fields[6]) * 100 if fields[6] else None,  # 腾讯返回的是手，转为股
                 open_price=safe_float(fields[5]),
                 high=safe_float(fields[33]) if len(fields) > 33 else None,
