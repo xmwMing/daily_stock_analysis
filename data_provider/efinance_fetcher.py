@@ -480,6 +480,9 @@ class EfinanceFetcher(BaseFetcher):
             high_col = '最高' if '最高' in df.columns else 'high'
             low_col = '最低' if '最低' in df.columns else 'low'
             open_col = '开盘' if '开盘' in df.columns else 'open'
+            # 添加市值相关列名
+            total_mv_col = '总市值' if '总市值' in df.columns else 'total_mv'
+            circ_mv_col = '流通市值' if '流通市值' in df.columns else 'circ_mv'
             
             quote = UnifiedRealtimeQuote(
                 code=stock_code,
@@ -495,6 +498,8 @@ class EfinanceFetcher(BaseFetcher):
                 high=safe_float(row.get(high_col)),
                 low=safe_float(row.get(low_col)),
                 open_price=safe_float(row.get(open_col)),
+                total_mv=safe_float(row.get(total_mv_col)),
+                circ_mv=safe_float(row.get(circ_mv_col)),
             )
             
             logger.info(f"[实时行情-efinance] {stock_code} {quote.name}: 价格={quote.price}, 涨跌={quote.change_pct}%, "

@@ -55,7 +55,6 @@ class HotStockFinder:
         filter_config = HOT_STOCK_CONFIG.get('filter', {})
         self.min_price = filter_config.get('min_price', 3.0)
         self.max_price = filter_config.get('max_price', 300.0)
-        self.min_market_cap = filter_config.get('min_market_cap', 5e9)
         self.min_list_days = filter_config.get('min_list_days', 90)
 
         # 从配置加载获取数量
@@ -73,7 +72,6 @@ class HotStockFinder:
         logger.info(f"HotStockFinder 初始化完成: 缓存TTL={cache_ttl}秒, "
                    f"每个榜单获取{self.fetch_count}只, "
                    f"过滤条件=[价格:{self.min_price}-{self.max_price}元, "
-                   f"市值>={self.min_market_cap/1e8:.0f}亿, "
                    f"上市>={self.min_list_days}天]")
 
     def find_hot_stocks(self) -> List[StockInfo]:
@@ -83,7 +81,8 @@ class HotStockFinder:
         流程：
         1. 获取人气榜和飙升榜前N只股票（N由配置决定）
         2. 合并并去重
-        3. 应用过滤条件
+        3. 使用DataFetcherManager获取详细实时行情数据
+        4. 应用过滤条件
 
         Returns:
             List[StockInfo]: 过滤后的热门股票列表
@@ -137,6 +136,9 @@ class HotStockFinder:
             logger.info(f"合并两个榜单后共获得 {len(all_stocks)} 只不重复的热门股票")
             logger.info(f"各榜单获取数量: 飙升榜={self.stats['gainers_count']}, 人气榜={self.stats['turnover_count']}")
 
+            # 使用DataFetcherManager获取详细实时行情数据
+            all_stocks = self._enrich_stock_data(all_stocks)
+
             # 应用过滤条件
             filtered_stocks = self._apply_filters(all_stocks)
 
@@ -152,6 +154,86 @@ class HotStockFinder:
         except Exception as e:
             logger.error(f"发现热门股票失败: {e}", exc_info=True)
             return []
+
+    def _enrich_stock_data(self, stocks: List[StockInfo]) -> List[StockInfo]:
+        """
+        使用DataFetcherManager丰富股票数据，获取缺失的关键指标
+
+        Args:
+            stocks: 股票列表
+
+        Returns:
+            丰富数据后的股票列表
+        """
+        logger.info("[步骤] 丰富股票数据，获取缺失的关键指标...")
+
+        try:
+            # 导入DataFetcherManager
+            from data_provider import DataFetcherManager
+
+            # 创建DataFetcherManager实例
+            fetcher_manager = DataFetcherManager()
+
+            # 处理每只股票
+            enriched_stocks = []
+            for stock in stocks:
+                try:
+                    # 清理股票代码，移除前缀
+                    code = stock.code.replace('SH', '').replace('SZ', '')
+
+                    # 获取实时行情数据
+                    logger.debug(f"[获取数据] 处理股票: {code} - {stock.name}")
+                    quote = fetcher_manager.get_realtime_quote(code)
+
+                    if quote:
+                        # 更新股票数据
+                        stock.price = quote.price or stock.price
+                        stock.change_pct = quote.change_pct or stock.change_pct
+                        stock.volume = quote.volume or stock.volume
+                        stock.amount = quote.amount or stock.amount
+                        stock.turnover_rate = quote.turnover_rate or stock.turnover_rate
+                        stock.market_cap = quote.total_mv or stock.market_cap
+
+                        # 打印详细的更新信息，便于调试
+                        # 构建调试信息，根据实际数据情况显示
+                        debug_info = f"[更新数据] {code} {stock.name}: "
+                        debug_info += f"价格={stock.price}, 涨跌={stock.change_pct}%, "
+                        debug_info += f"成交量={stock.volume}, 成交额={stock.amount}, "
+                        debug_info += f"换手率={stock.turnover_rate}%"
+
+                        # 只在市值有有效数据时显示
+                        if stock.market_cap and stock.market_cap > 0:
+                            debug_info += f", 市值={stock.market_cap}"
+
+                        logger.debug(debug_info)
+
+                        # 构建获取成功信息
+                        success_info = f"[获取成功] {code} {stock.name}: 价格={stock.price}, 涨跌={stock.change_pct}%, "
+                        success_info += f"成交量={stock.volume}, 成交额={stock.amount}, "
+                        success_info += f"换手率={stock.turnover_rate}%"
+
+                        # 只在市值有有效数据时显示
+                        if stock.market_cap and stock.market_cap > 0:
+                            success_info += f", 市值={stock.market_cap}"
+
+                        logger.debug(success_info)
+                    else:
+                        logger.warning(f"[获取失败] 未获取到 {code} 的实时行情")
+
+                    enriched_stocks.append(stock)
+
+                except Exception as e:
+                    logger.error(f"[获取错误] 处理 {stock.code} 时出错: {e}")
+                    # 继续处理下一只股票
+                    enriched_stocks.append(stock)
+
+            logger.info(f"[步骤] 成功丰富 {len(enriched_stocks)} 只股票的数据")
+            return enriched_stocks
+
+        except Exception as e:
+            logger.error(f"[步骤] 丰富股票数据失败: {e}")
+            # 如果失败，返回原始股票列表
+            return stocks
 
     def _fetch_top_gainers(self, limit: int = 100) -> Optional[pd.DataFrame]:
         """
@@ -673,7 +755,13 @@ if __name__ == "__main__":
 
     print(f"\n发现 {len(hot_stocks)} 只热门股票:")
     for i, stock in enumerate(hot_stocks[:10], 1):
-        print(f"{i}. {stock.code} {stock.name}: "
-              f"价格={stock.price:.2f}元, 涨幅={stock.change_pct:.2f}%, "
-              f"换手率={stock.turnover_rate:.2f}%, "
-              f"市值={stock.market_cap/1e8:.2f}亿")
+        # 构建输出信息，根据实际数据情况显示
+        output_info = f"{i}. {stock.code} {stock.name}: "
+        output_info += f"价格={stock.price:.2f}元, 涨幅={stock.change_pct:.2f}%, "
+        output_info += f"换手率={stock.turnover_rate:.2f}%"
+
+        # 只在市值有有效数据时显示
+        if stock.market_cap and stock.market_cap > 0:
+            output_info += f", 市值={stock.market_cap/1e8:.2f}亿"
+
+        print(output_info)
