@@ -48,6 +48,8 @@ except ImportError:
     logger.warning("[Feishu Stream] 请运行: pip install lark-oapi")
 
 from bot.models import BotMessage, BotResponse, ChatType
+from src.formatters import format_feishu_markdown, chunk_feishu_content
+from src.config import get_config
 
 
 class FeishuReplyClient:
@@ -72,10 +74,94 @@ class FeishuReplyClient:
             .log_level(lark.LogLevel.WARNING) \
             .build()
 
-    def reply_text(self, message_id: str, text: str, at_user: bool = False, 
+        # 获取配置的最大字节数
+        config = get_config()
+        self._max_bytes = getattr(config, 'feishu_max_bytes', 20000)
+
+    def _send_interactive_card(self, content: str, message_id: Optional[str] = None,
+                               chat_id: Optional[str] = None,
+                               receive_id_type: str = "chat_id",
+                               at_user: bool = False, user_id: Optional[str] = None) -> bool:
+        """
+        发送交互卡片消息（支持 Markdown 渲染）
+        
+        Args:
+            content: Markdown 格式的内容
+            message_id: 原消息 ID（回复时使用）
+            chat_id: 会话 ID（主动发送时使用）
+            receive_id_type: 接收者 ID 类型
+            at_user: 是否 @用户
+            user_id: 用户 open_id（at_user=True 时需要）
+            
+        Returns:
+            是否发送成功
+        """
+        try:
+            # 如果需要 @用户，在内容前添加 @ 标记
+            final_content = content
+            if at_user and user_id:
+                final_content = f"<at user_id=\"{user_id}\"></at> {content}"
+            
+            # 构建交互卡片 payload
+            card_data = {
+                "config": {"wide_screen_mode": True},
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": final_content
+                        }
+                    }
+                ]
+            }
+
+            content_json = json.dumps(card_data)
+
+            if message_id:
+                # 回复消息
+                request = ReplyMessageRequest.builder() \
+                    .message_id(message_id) \
+                    .request_body(
+                    ReplyMessageRequestBody.builder()
+                    .content(content_json)
+                    .msg_type("interactive")
+                    .build()
+                ) \
+                    .build()
+                response = self._client.im.v1.message.reply(request)
+            else:
+                # 主动发送消息
+                request = CreateMessageRequest.builder() \
+                    .receive_id_type(receive_id_type) \
+                    .request_body(
+                    CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .content(content_json)
+                    .msg_type("interactive")
+                    .build()
+                ) \
+                    .build()
+                response = self._client.im.v1.message.create(request)
+
+            if not response.success():
+                logger.error(
+                    f"[Feishu Stream] 发送交互卡片失败: code={response.code}, "
+                    f"msg={response.msg}, log_id={response.get_log_id()}"
+                )
+                return False
+
+            logger.debug(f"[Feishu Stream] 发送交互卡片成功")
+            return True
+
+        except Exception as e:
+            logger.error(f"[Feishu Stream] 发送交互卡片异常: {e}")
+            return False
+
+    def reply_text(self, message_id: str, text: str, at_user: bool = False,
                    user_id: Optional[str] = None) -> bool:
         """
-        回复文本消息
+        回复文本消息（支持交互卡片和分段发送）
         
         Args:
             message_id: 原消息 ID
@@ -86,43 +172,32 @@ class FeishuReplyClient:
         Returns:
             是否发送成功
         """
-        try:
-            # 构建回复内容
-            if at_user and user_id:
-                content = json.dumps({"text": f"<at user_id=\"{user_id}\"></at> {text}"})
-            else:
-                content = json.dumps({"text": text})
+        # 将文本转换为飞书 Markdown 格式
+        formatted_text = format_feishu_markdown(text)
 
-            request = ReplyMessageRequest.builder() \
-                .message_id(message_id) \
-                .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .content(content)
-                    .msg_type("text")
-                    .build()
-                ) \
-                .build()
-
-            response = self._client.im.v1.message.reply(request)
-
-            if not response.success():
-                logger.error(
-                    f"[Feishu Stream] 回复消息失败: code={response.code}, "
-                    f"msg={response.msg}, log_id={response.get_log_id()}"
+        # 检查是否需要分段发送
+        content_bytes = len(formatted_text.encode('utf-8'))
+        if content_bytes > self._max_bytes:
+            logger.info(
+                f"[Feishu Stream] 回复消息内容超长({content_bytes}字节)，将分批发送"
+            )
+            return chunk_feishu_content(
+                formatted_text,
+                self._max_bytes,
+                lambda chunk: self._send_interactive_card(
+                    chunk, message_id=message_id, at_user=at_user, user_id=user_id
                 )
-                return False
+            )
 
-            logger.debug(f"[Feishu Stream] 回复消息成功: message_id={message_id}")
-            return True
+        # 单条消息，使用交互卡片
+        return self._send_interactive_card(
+            formatted_text, message_id=message_id, at_user=at_user, user_id=user_id
+        )
 
-        except Exception as e:
-            logger.error(f"[Feishu Stream] 回复消息异常: {e}")
-            return False
-
-    def send_to_chat(self, chat_id: str, text: str, 
+    def send_to_chat(self, chat_id: str, text: str,
                      receive_id_type: str = "chat_id") -> bool:
         """
-        发送消息到指定会话
+        发送消息到指定会话（支持交互卡片和分段发送）
         
         Args:
             chat_id: 会话 ID
@@ -132,35 +207,27 @@ class FeishuReplyClient:
         Returns:
             是否发送成功
         """
-        try:
-            content = json.dumps({"text": text})
+        # 将文本转换为飞书 Markdown 格式
+        formatted_text = format_feishu_markdown(text)
 
-            request = CreateMessageRequest.builder() \
-                .receive_id_type(receive_id_type) \
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(chat_id)
-                    .content(content)
-                    .msg_type("text")
-                    .build()
-                ) \
-                .build()
-
-            response = self._client.im.v1.message.create(request)
-
-            if not response.success():
-                logger.error(
-                    f"[Feishu Stream] 发送消息失败: code={response.code}, "
-                    f"msg={response.msg}, log_id={response.get_log_id()}"
+        # 检查是否需要分段发送
+        content_bytes = len(formatted_text.encode('utf-8'))
+        if content_bytes > self._max_bytes:
+            logger.info(
+                f"[Feishu Stream] 发送消息内容超长({content_bytes}字节)，将分批发送"
+            )
+            return chunk_feishu_content(
+                formatted_text,
+                self._max_bytes,
+                lambda chunk: self._send_interactive_card(
+                    chunk, chat_id=chat_id, receive_id_type=receive_id_type
                 )
-                return False
+            )
 
-            logger.debug(f"[Feishu Stream] 发送消息成功: chat_id={chat_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"[Feishu Stream] 发送消息异常: {e}")
-            return False
+        # 单条消息，使用交互卡片
+        return self._send_interactive_card(
+            formatted_text, chat_id=chat_id, receive_id_type=receive_id_type
+        )
 
 
 class FeishuStreamHandler:
@@ -172,9 +239,9 @@ class FeishuStreamHandler:
     """
 
     def __init__(
-        self,
-        on_message: Callable[[BotMessage], BotResponse],
-        reply_client: FeishuReplyClient
+            self,
+            on_message: Callable[[BotMessage], BotResponse],
+            reply_client: FeishuReplyClient
     ):
         """
         Args:
@@ -346,7 +413,7 @@ class FeishuStreamHandler:
             mentions: @提及列表
         """
         import re
-        
+
         # 方式1: 通过 mentions 列表移除（精确匹配）
         for mention in (mentions or []):
             key = getattr(mention, 'key', '') or ''
@@ -376,9 +443,9 @@ class FeishuStreamClient:
     """
 
     def __init__(
-        self,
-        app_id: Optional[str] = None,
-        app_secret: Optional[str] = None
+            self,
+            app_id: Optional[str] = None,
+            app_secret: Optional[str] = None
     ):
         """
         Args:
@@ -433,7 +500,7 @@ class FeishuStreamClient:
         # 但 SDK 要求传入（可以为空字符串）
         from src.config import get_config
         config = get_config()
-        
+
         encrypt_key = getattr(config, 'feishu_encrypt_key', '') or ''
         verification_token = getattr(config, 'feishu_verification_token', '') or ''
 

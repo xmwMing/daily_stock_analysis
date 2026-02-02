@@ -161,6 +161,7 @@ class AnalysisResult:
     sentiment_score: int  # 综合评分 0-100 (>70强烈看多, >60看多, 40-60震荡, <40看空)
     trend_prediction: str  # 趋势预测：强烈看多/看多/震荡/看空/强烈看空
     operation_advice: str  # 操作建议：买入/加仓/持有/减仓/卖出/观望
+    decision_type: str = "hold"  # 决策类型：buy/hold/sell（用于统计）
     confidence_level: str = "中"  # 置信度：高/中/低
 
     # ========== 决策仪表盘 (新增) ==========
@@ -208,6 +209,7 @@ class AnalysisResult:
             'sentiment_score': self.sentiment_score,
             'trend_prediction': self.trend_prediction,
             'operation_advice': self.operation_advice,
+            'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
             'dashboard': self.dashboard,  # 决策仪表盘数据
             'trend_analysis': self.trend_analysis,
@@ -346,9 +348,11 @@ class GeminiAnalyzer:
 
 ```json
 {
+    "stock_name": "股票中文名称",
     "sentiment_score": 0-100整数,
     "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
     "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
+    "decision_type": "buy/hold/sell",
     "confidence_level": "高/中/低",
 
     "dashboard": {
@@ -877,18 +881,22 @@ class GeminiAnalyzer:
 
             logger.info(f"[LLM调用] 开始调用 {api_name} (模型: {model_name}, temperature={generation_config['temperature']}, max_tokens={generation_config['max_output_tokens']})...")
 
+            # 根据实际使用的 API 显示日志
+            api_provider = "OpenAI" if self._use_openai else "Gemini"
+            logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
+
             # 使用带重试的 API 调用
             start_time = time.time()
             response_text = self._call_api_with_retry(prompt, generation_config)
             elapsed = time.time() - start_time
 
             # 记录响应信息
-            logger.info(f"[LLM返回] {api_name} 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
+            logger.info(f"[LLM返回] {api_provider} API 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
 
             # 记录响应预览（INFO级别）和完整响应（DEBUG级别）
             response_preview = response_text[:300] + "..." if len(response_text) > 300 else response_text
             logger.info(f"[LLM返回 预览]\n{response_preview}")
-            logger.debug(f"=== {api_name} 完整响应 ({len(response_text)}字符) ===\n{response_text}\n=== End Response ===")
+            logger.debug(f"=== {api_provider} 完整响应 ({len(response_text)}字符) ===\n{response_text}\n=== End Response ===")
 
             # 解析响应
             result = self._parse_response(response_text, code, name)
@@ -1077,6 +1085,9 @@ class GeminiAnalyzer:
 
 请为 **{stock_name}({code})** 生成【决策仪表盘】，严格按照 JSON 格式输出。
 
+### ⚠️ 重要：股票名称确认
+如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
+
 ### 重点关注（必须明确回答）：
 1. ❓ 是否满足 MA5>MA10>MA20 多头排列？
 2. ❓ 当前乖离率是否在安全范围内（<5%）？—— 超过5%必须标注"严禁追高"
@@ -1085,6 +1096,7 @@ class GeminiAnalyzer:
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
 
 ### 决策仪表盘要求：
+- **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
 - **核心结论**：一句话说清该买/该卖/该等
 - **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
 - **具体狙击点位**：买入价、止损价、目标价（精确到分）
@@ -1151,7 +1163,23 @@ class GeminiAnalyzer:
                 # 提取 dashboard 数据
                 dashboard = data.get('dashboard', None)
 
+                # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
+                ai_stock_name = data.get('stock_name')
+                if ai_stock_name and (name.startswith('股票') or name == code or 'Unknown' in name):
+                    name = ai_stock_name
+
                 # 解析所有字段，使用默认值防止缺失
+                # 解析 decision_type，如果没有则根据 operation_advice 推断
+                decision_type = data.get('decision_type', '')
+                if not decision_type:
+                    op = data.get('operation_advice', '持有')
+                    if op in ['买入', '加仓', '强烈买入']:
+                        decision_type = 'buy'
+                    elif op in ['卖出', '减仓', '强烈卖出']:
+                        decision_type = 'sell'
+                    else:
+                        decision_type = 'hold'
+
                 return AnalysisResult(
                     code=code,
                     name=name,
@@ -1159,6 +1187,7 @@ class GeminiAnalyzer:
                     sentiment_score=int(data.get('sentiment_score', 50)),
                     trend_prediction=data.get('trend_prediction', '震荡'),
                     operation_advice=data.get('operation_advice', '持有'),
+                    decision_type=decision_type,
                     confidence_level=data.get('confidence_level', '中'),
                     # 决策仪表盘
                     dashboard=dashboard,
@@ -1240,10 +1269,14 @@ class GeminiAnalyzer:
             sentiment_score = 65
             trend = '看多'
             advice = '买入'
+            decision_type = 'buy'
         elif negative_count > positive_count + 1:
             sentiment_score = 35
             trend = '看空'
             advice = '卖出'
+            decision_type = 'sell'
+        else:
+            decision_type = 'hold'
 
         # 截取前500字符作为摘要
         summary = response_text[:500] if response_text else '无分析结果'
@@ -1254,6 +1287,7 @@ class GeminiAnalyzer:
             sentiment_score=sentiment_score,
             trend_prediction=trend,
             operation_advice=advice,
+            decision_type=decision_type,
             confidence_level='低',
             analysis_summary=summary,
             key_points='JSON解析失败，仅供参考',

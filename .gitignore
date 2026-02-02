@@ -67,3 +67,7 @@ local/
 run.sh
 
 verify_*.py
+
+# ignore claude files
+.claude/
+CLAUDE.md

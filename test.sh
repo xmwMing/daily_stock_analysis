@@ -9,6 +9,7 @@
 # 测试场景：
 #   market      - 仅大盘复盘
 #   a-stock     - A股个股分析（茅台、平安银行）
+#   etf         - etf分析(卫星etf 563230)
 #   hk-stock    - 港股分析（腾讯、阿里）
 #   us-stock    - 美股分析（苹果、特斯拉）
 #   mixed       - 混合市场分析
@@ -81,7 +82,7 @@ check_deps() {
 test_market() {
     header "测试场景: 大盘复盘"
     info "运行大盘复盘分析..."
-    python3 main.py --market-review
+    python3 main.py --market-review "$@"
     success "大盘复盘测试完成"
 }
 
@@ -89,15 +90,23 @@ test_market() {
 test_a_stock() {
     header "测试场景: A股分析"
     info "分析A股: 600519(茅台), 000001(平安银行)"
-    python3 main.py --stocks 600519,000001  --no-market-review
+    python3 main.py --stocks 600519,000001  --no-market-review "$@"
     success "A股分析测试完成"
+}
+
+# 测试2.5: ETF分析
+test_etf() {
+    header "测试场景: ETF分析"
+    info "分析ETF: 563230(卫星ETF)"
+    python3 main.py --stocks 563230 --no-market-review "$@"
+    success "ETF分析测试完成"
 }
 
 # 测试3: 港股分析
 test_hk_stock() {
     header "测试场景: 港股分析"
     info "分析港股: hk00700(腾讯), hk09988(阿里)"
-    python3 main.py --stocks hk00700,hk09988 --no-market-review
+    python3 main.py --stocks hk00700,hk09988 --no-market-review "$@"
     success "港股分析测试完成"
 }
 
@@ -287,47 +296,64 @@ main() {
 
     case "${1:-help}" in
         market)
-            test_market
+            shift
+            test_market "$@"
             ;;
         a-stock|a_stock|astock)
-            test_a_stock
+            shift
+            test_a_stock "$@"
+            ;;
+        etf)
+            shift
+            test_etf "$@"
             ;;
         hk-stock|hk_stock|hkstock|hk)
-            test_hk_stock
+            shift
+            test_hk_stock "$@"
             ;;
         us-stock|us_stock|usstock|us)
-            shift # 移除第一个参数(test_name)
+            shift
             test_us_stock "$@"
             ;;
         mixed|mix)
-            test_mixed
+            shift
+            test_mixed "$@"
             ;;
         single)
-            test_single
+            shift
+            test_single "$@"
             ;;
         dry-run|dryrun|dry)
-            test_dry_run
+            shift
+            test_dry_run "$@"
             ;;
         full)
-            test_full
+            shift
+            test_full "$@"
             ;;
         quick|q)
-            test_quick
+            shift
+            test_quick "$@"
             ;;
         code|recognition)
-            test_code_recognition
+            shift
+            test_code_recognition "$@"
             ;;
         yfinance|yf)
-            test_yfinance_convert
+            shift
+            test_yfinance_convert "$@"
             ;;
         syntax)
-            test_syntax
+            shift
+            test_syntax "$@"
             ;;
         flake8|lint)
-            test_flake8
+            shift
+            test_flake8 "$@"
             ;;
         all)
-            test_all
+            shift
+            test_all "$@"
             ;;
         help|--help|-h|*)
             echo "使用方法: $0 [测试场景]"
@@ -335,6 +361,7 @@ main() {
             echo "测试场景:"
             echo "  market      - 仅大盘复盘"
             echo "  a-stock     - A股个股分析"
+            echo "  etf         - ETF分析"
             echo "  hk-stock    - 港股分析"
             echo "  us-stock    - 美股分析"
             echo "  mixed       - 混合市场分析"
