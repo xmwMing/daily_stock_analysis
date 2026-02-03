@@ -123,6 +123,9 @@ class Config:
     # === 数据库配置 ===
     database_path: str = "./data/stock_analysis.db"
 
+    # 是否保存分析上下文快照（用于历史回溯）
+    save_context_snapshot: bool = True
+    
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
     log_level: str = "INFO"  # 日志级别
@@ -354,6 +357,7 @@ class Config:
             wechat_max_bytes=wechat_max_bytes,
             wechat_msg_type=wechat_msg_type_lower,
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
+            save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=int(os.getenv('MAX_WORKERS', '3')),

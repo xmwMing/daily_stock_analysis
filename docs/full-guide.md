@@ -548,6 +548,7 @@ WEBUI_ENABLED=true
 | `/` | GET | 配置管理页面 |
 | `/health` | GET | 健康检查 |
 | `/analysis?code=xxx` | GET | 触发单只股票异步分析 |
+| `/analysis/history` | GET | 查询分析历史记录 |
 | `/tasks` | GET | 查询所有任务状态 |
 | `/task?id=xxx` | GET | 查询单个任务状态 |
 

@@ -12,9 +12,12 @@ A股自选股智能分析系统 - 存储层
 """
 
 import atexit
+import hashlib
+import json
 import logging
+import re
 from datetime import datetime, date, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +31,7 @@ from sqlalchemy import (
     Integer,
     Index,
     UniqueConstraint,
+    Text,
     select,
     and_,
     desc,
@@ -45,6 +49,9 @@ logger = logging.getLogger(__name__)
 
 # SQLAlchemy ORM 基类
 Base = declarative_base()
+
+if TYPE_CHECKING:
+    from src.search_service import SearchResponse
 
 
 # === 数据模型定义 ===
@@ -117,6 +124,118 @@ class StockDaily(Base):
             'ma20': self.ma20,
             'volume_ratio': self.volume_ratio,
             'data_source': self.data_source,
+        }
+
+
+class NewsIntel(Base):
+    """
+    新闻情报数据模型
+
+    存储搜索到的新闻情报条目，用于后续分析与查询
+    """
+    __tablename__ = 'news_intel'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # 关联用户查询操作
+    query_id = Column(String(64), index=True)
+
+    # 股票信息
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+
+    # 搜索上下文
+    dimension = Column(String(32), index=True)  # latest_news / risk_check / earnings / market_analysis / industry
+    query = Column(String(255))
+    provider = Column(String(32), index=True)
+
+    # 新闻内容
+    title = Column(String(300), nullable=False)
+    snippet = Column(Text)
+    url = Column(String(1000), nullable=False)
+    source = Column(String(100))
+    published_date = Column(DateTime, index=True)
+
+    # 入库时间
+    fetched_at = Column(DateTime, default=datetime.now, index=True)
+    query_source = Column(String(32), index=True)  # bot/web/cli/system
+    requester_platform = Column(String(20))
+    requester_user_id = Column(String(64))
+    requester_user_name = Column(String(64))
+    requester_chat_id = Column(String(64))
+    requester_message_id = Column(String(64))
+    requester_query = Column(String(255))
+
+    __table_args__ = (
+        UniqueConstraint('url', name='uix_news_url'),
+        Index('ix_news_code_pub', 'code', 'published_date'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<NewsIntel(code={self.code}, title={self.title[:20]}...)>"
+
+
+class AnalysisHistory(Base):
+    """
+    分析结果历史记录模型
+
+    保存每次分析结果，支持按 query_id/股票代码检索
+    """
+    __tablename__ = 'analysis_history'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # 关联查询链路
+    query_id = Column(String(64), index=True)
+
+    # 股票信息
+    code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50))
+    report_type = Column(String(16), index=True)
+
+    # 核心结论
+    sentiment_score = Column(Integer)
+    operation_advice = Column(String(20))
+    trend_prediction = Column(String(50))
+    analysis_summary = Column(Text)
+
+    # 详细数据
+    raw_result = Column(Text)
+    news_content = Column(Text)
+    context_snapshot = Column(Text)
+
+    # 狙击点位（用于回测）
+    ideal_buy = Column(Float)
+    secondary_buy = Column(Float)
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_analysis_code_time', 'code', 'created_at'),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            'id': self.id,
+            'query_id': self.query_id,
+            'code': self.code,
+            'name': self.name,
+            'report_type': self.report_type,
+            'sentiment_score': self.sentiment_score,
+            'operation_advice': self.operation_advice,
+            'trend_prediction': self.trend_prediction,
+            'analysis_summary': self.analysis_summary,
+            'raw_result': self.raw_result,
+            'news_content': self.news_content,
+            'context_snapshot': self.context_snapshot,
+            'ideal_buy': self.ideal_buy,
+            'secondary_buy': self.secondary_buy,
+            'stop_loss': self.stop_loss,
+            'take_profit': self.take_profit,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
 
@@ -276,6 +395,213 @@ class DatabaseManager:
                 .limit(days)
             ).scalars().all()
             
+            return list(results)
+
+    def save_news_intel(
+        self,
+        code: str,
+        name: str,
+        dimension: str,
+        query: str,
+        response: 'SearchResponse',
+        query_context: Optional[Dict[str, str]] = None
+    ) -> int:
+        """
+        保存新闻情报到数据库
+
+        去重策略：
+        - 优先按 URL 去重（唯一约束）
+        - URL 缺失时按 title + source + published_date 进行软去重
+
+        关联策略：
+        - query_context 记录用户查询信息（平台、用户、会话、原始指令等）
+        """
+        if not response or not response.results:
+            return 0
+
+        saved_count = 0
+
+        with self.get_session() as session:
+            try:
+                for item in response.results:
+                    title = (item.title or '').strip()
+                    url = (item.url or '').strip()
+                    source = (item.source or '').strip()
+                    snippet = (item.snippet or '').strip()
+                    published_date = self._parse_published_date(item.published_date)
+
+                    if not title and not url:
+                        continue
+
+                    url_key = url or self._build_fallback_url_key(
+                        code=code,
+                        title=title,
+                        source=source,
+                        published_date=published_date
+                    )
+
+                    # 优先按 URL 或兜底键去重
+                    existing = session.execute(
+                        select(NewsIntel).where(NewsIntel.url == url_key)
+                    ).scalar_one_or_none()
+
+                    if existing:
+                        existing.name = name or existing.name
+                        existing.dimension = dimension or existing.dimension
+                        existing.query = query or existing.query
+                        existing.provider = response.provider or existing.provider
+                        existing.snippet = snippet or existing.snippet
+                        existing.source = source or existing.source
+                        existing.published_date = published_date or existing.published_date
+                        existing.fetched_at = datetime.now()
+
+                        if query_context:
+                            existing.query_id = query_context.get("query_id") or existing.query_id
+                            existing.query_source = query_context.get("query_source") or existing.query_source
+                            existing.requester_platform = query_context.get("requester_platform") or existing.requester_platform
+                            existing.requester_user_id = query_context.get("requester_user_id") or existing.requester_user_id
+                            existing.requester_user_name = query_context.get("requester_user_name") or existing.requester_user_name
+                            existing.requester_chat_id = query_context.get("requester_chat_id") or existing.requester_chat_id
+                            existing.requester_message_id = query_context.get("requester_message_id") or existing.requester_message_id
+                            existing.requester_query = query_context.get("requester_query") or existing.requester_query
+                    else:
+                        try:
+                            with session.begin_nested():
+                                record = NewsIntel(
+                                    code=code,
+                                    name=name,
+                                    dimension=dimension,
+                                    query=query,
+                                    provider=response.provider,
+                                    title=title,
+                                    snippet=snippet,
+                                    url=url_key,
+                                    source=source,
+                                    published_date=published_date,
+                                    fetched_at=datetime.now(),
+                                    query_id=(query_context or {}).get("query_id"),
+                                    query_source=(query_context or {}).get("query_source"),
+                                    requester_platform=(query_context or {}).get("requester_platform"),
+                                    requester_user_id=(query_context or {}).get("requester_user_id"),
+                                    requester_user_name=(query_context or {}).get("requester_user_name"),
+                                    requester_chat_id=(query_context or {}).get("requester_chat_id"),
+                                    requester_message_id=(query_context or {}).get("requester_message_id"),
+                                    requester_query=(query_context or {}).get("requester_query"),
+                                )
+                                session.add(record)
+                                session.flush()
+                            saved_count += 1
+                        except IntegrityError:
+                            # 单条 URL 唯一约束冲突（如并发插入），仅跳过本条，保留本批其余成功项
+                            logger.debug("新闻情报重复（已跳过）: %s %s", code, url_key)
+
+                session.commit()
+                logger.info(f"保存新闻情报成功: {code}, 新增 {saved_count} 条")
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"保存新闻情报失败: {e}")
+                raise
+
+        return saved_count
+
+    def get_recent_news(self, code: str, days: int = 7, limit: int = 20) -> List[NewsIntel]:
+        """
+        获取指定股票最近 N 天的新闻情报
+        """
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        with self.get_session() as session:
+            results = session.execute(
+                select(NewsIntel)
+                .where(
+                    and_(
+                        NewsIntel.code == code,
+                        NewsIntel.fetched_at >= cutoff_date
+                    )
+                )
+                .order_by(desc(NewsIntel.fetched_at))
+                .limit(limit)
+            ).scalars().all()
+
+            return list(results)
+
+    def save_analysis_history(
+        self,
+        result: Any,
+        query_id: str,
+        report_type: str,
+        news_content: Optional[str],
+        context_snapshot: Optional[Dict[str, Any]] = None,
+        save_snapshot: bool = True
+    ) -> int:
+        """
+        保存分析结果历史记录
+        """
+        if result is None:
+            return 0
+
+        sniper_points = self._extract_sniper_points(result)
+        raw_result = self._build_raw_result(result)
+        context_text = None
+        if save_snapshot and context_snapshot is not None:
+            context_text = self._safe_json_dumps(context_snapshot)
+
+        record = AnalysisHistory(
+            query_id=query_id,
+            code=result.code,
+            name=result.name,
+            report_type=report_type,
+            sentiment_score=result.sentiment_score,
+            operation_advice=result.operation_advice,
+            trend_prediction=result.trend_prediction,
+            analysis_summary=result.analysis_summary,
+            raw_result=self._safe_json_dumps(raw_result),
+            news_content=news_content,
+            context_snapshot=context_text,
+            ideal_buy=sniper_points.get("ideal_buy"),
+            secondary_buy=sniper_points.get("secondary_buy"),
+            stop_loss=sniper_points.get("stop_loss"),
+            take_profit=sniper_points.get("take_profit"),
+            created_at=datetime.now(),
+        )
+
+        with self.get_session() as session:
+            try:
+                session.add(record)
+                session.commit()
+                return 1
+            except Exception as e:
+                session.rollback()
+                logger.error(f"保存分析历史失败: {e}")
+                return 0
+
+    def get_analysis_history(
+        self,
+        code: Optional[str] = None,
+        query_id: Optional[str] = None,
+        days: int = 30,
+        limit: int = 50
+    ) -> List[AnalysisHistory]:
+        """
+        查询分析历史记录
+        """
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        with self.get_session() as session:
+            conditions = [AnalysisHistory.created_at >= cutoff_date]
+            if code:
+                conditions.append(AnalysisHistory.code == code)
+            if query_id:
+                conditions.append(AnalysisHistory.query_id == query_id)
+
+            results = session.execute(
+                select(AnalysisHistory)
+                .where(and_(*conditions))
+                .order_by(desc(AnalysisHistory.created_at))
+                .limit(limit)
+            ).scalars().all()
+
             return list(results)
     
     def get_data_range(
@@ -484,6 +810,116 @@ class DatabaseManager:
             return "短期走弱 🔽"
         else:
             return "震荡整理 ↔️"
+
+    @staticmethod
+    def _parse_published_date(value: Optional[str]) -> Optional[datetime]:
+        """
+        解析发布时间字符串（失败返回 None）
+        """
+        if not value:
+            return None
+
+        if isinstance(value, datetime):
+            return value
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        # 优先尝试 ISO 格式
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            pass
+
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+            "%Y/%m/%d",
+        ):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+
+        return None
+
+    @staticmethod
+    def _safe_json_dumps(data: Any) -> str:
+        """
+        安全序列化为 JSON 字符串
+        """
+        try:
+            return json.dumps(data, ensure_ascii=False, default=str)
+        except Exception:
+            return json.dumps(str(data), ensure_ascii=False)
+
+    @staticmethod
+    def _build_raw_result(result: Any) -> Dict[str, Any]:
+        """
+        生成完整分析结果字典
+        """
+        data = result.to_dict() if hasattr(result, "to_dict") else {}
+        data.update({
+            'data_sources': getattr(result, 'data_sources', ''),
+            'raw_response': getattr(result, 'raw_response', None),
+        })
+        return data
+
+    @staticmethod
+    def _parse_sniper_value(value: Any) -> Optional[float]:
+        """
+        解析狙击点位数值
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        text = str(value).replace(',', '').strip()
+        if not text:
+            return None
+
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        if not match:
+            return None
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+
+    def _extract_sniper_points(self, result: Any) -> Dict[str, Optional[float]]:
+        """
+        抽取狙击点位数据
+        """
+        raw_points = {}
+        if hasattr(result, "get_sniper_points"):
+            raw_points = result.get_sniper_points() or {}
+
+        return {
+            "ideal_buy": self._parse_sniper_value(raw_points.get("ideal_buy")),
+            "secondary_buy": self._parse_sniper_value(raw_points.get("secondary_buy")),
+            "stop_loss": self._parse_sniper_value(raw_points.get("stop_loss")),
+            "take_profit": self._parse_sniper_value(raw_points.get("take_profit")),
+        }
+
+    @staticmethod
+    def _build_fallback_url_key(
+        code: str,
+        title: str,
+        source: str,
+        published_date: Optional[datetime]
+    ) -> str:
+        """
+        生成无 URL 时的去重键（确保稳定且较短）
+        """
+        date_str = published_date.isoformat() if published_date else ""
+        raw_key = f"{code}|{title}|{source}|{date_str}"
+        digest = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
+        return f"no-url:{code}:{digest}"
 
 
 # 便捷函数

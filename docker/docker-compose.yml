@@ -31,7 +31,7 @@ x-common: &common
     # 注意：容器内如果绑定到 127.0.0.1，宿主机端口映射将无法访问 WebUI。
     # 即使 .env 里设置了 WEBUI_HOST=127.0.0.1，这里也会强制覆盖。
     - WEBUI_HOST=0.0.0.0
-    - WEBUI_PORT=8000
+    # WEBUI_PORT 从 .env 文件读取，无需在此硬编码
 
     # 代理设置（如果需要）
     # - http_proxy=http://host.docker.internal:10809
@@ -61,4 +61,4 @@ services:
     container_name: stock-webui
     command: ["python", "main.py", "--webui-only"]
     ports:
-      - "8000:8000"
+      - "${WEBUI_PORT:-8000}:${WEBUI_PORT:-8000}"

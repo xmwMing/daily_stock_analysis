@@ -46,7 +46,10 @@ class StockAnalysisPipeline:
         self,
         config: Optional[Config] = None,
         max_workers: Optional[int] = None,
-        source_message: Optional[BotMessage] = None
+        source_message: Optional[BotMessage] = None,
+        query_id: Optional[str] = None,
+        query_source: Optional[str] = None,
+        save_context_snapshot: Optional[bool] = None
     ):
         """
         初始化调度器
@@ -58,6 +61,11 @@ class StockAnalysisPipeline:
         self.config = config or get_config()
         self.max_workers = max_workers or self.config.max_workers
         self.source_message = source_message
+        self.query_id = query_id
+        self.query_source = self._resolve_query_source(query_source)
+        self.save_context_snapshot = (
+            self.config.save_context_snapshot if save_context_snapshot is None else save_context_snapshot
+        )
         
         # 初始化各模块
         self.db = get_db()
@@ -136,7 +144,7 @@ class StockAnalysisPipeline:
             logger.error(f"[{code}] {error_msg}")
             return False, error_msg
     
-    def analyze_stock(self, code: str) -> Optional[AnalysisResult]:
+    def analyze_stock(self, code: str, report_type: ReportType) -> Optional[AnalysisResult]:
         """
         分析单只股票（增强版：含量比、换手率、筹码分析、多维度情报）
         
@@ -150,6 +158,7 @@ class StockAnalysisPipeline:
         
         Args:
             code: 股票代码
+            report_type: 报告类型
             
         Returns:
             AnalysisResult 或 None（如果分析失败）
@@ -229,6 +238,22 @@ class StockAnalysisPipeline:
                     )
                     logger.info(f"[{code}] 情报搜索完成: 共 {total_results} 条结果")
                     logger.debug(f"[{code}] 情报搜索结果:\n{news_context}")
+
+                    # 保存新闻情报到数据库（用于后续复盘与查询）
+                    try:
+                        query_context = self._build_query_context()
+                        for dim_name, response in intel_results.items():
+                            if response and response.success and response.results:
+                                self.db.save_news_intel(
+                                    code=code,
+                                    name=stock_name,
+                                    dimension=dim_name,
+                                    query=response.query,
+                                    response=response,
+                                    query_context=query_context
+                                )
+                    except Exception as e:
+                        logger.warning(f"[{code}] 保存新闻情报失败: {e}")
             else:
                 logger.info(f"[{code}] 搜索服务不可用，跳过情报搜索")
             
@@ -258,7 +283,27 @@ class StockAnalysisPipeline:
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
-            
+
+            # Step 8: 保存分析历史记录
+            if result:
+                try:
+                    context_snapshot = self._build_context_snapshot(
+                        enhanced_context=enhanced_context,
+                        news_content=news_context,
+                        realtime_quote=realtime_quote,
+                        chip_data=chip_data
+                    )
+                    self.db.save_analysis_history(
+                        result=result,
+                        query_id=self.query_id or "",
+                        report_type=report_type.value,
+                        news_content=news_context,
+                        context_snapshot=context_snapshot,
+                        save_snapshot=self.save_context_snapshot
+                    )
+                except Exception as e:
+                    logger.warning(f"[{code}] 保存分析历史失败: {e}")
+
             return result
             
         except Exception as e:
@@ -364,6 +409,87 @@ class StockAnalysisPipeline:
             return "明显放量"
         else:
             return "巨量"
+
+    def _build_context_snapshot(
+        self,
+        enhanced_context: Dict[str, Any],
+        news_content: Optional[str],
+        realtime_quote: Any,
+        chip_data: Optional[ChipDistribution]
+    ) -> Dict[str, Any]:
+        """
+        构建分析上下文快照
+        """
+        return {
+            "enhanced_context": enhanced_context,
+            "news_content": news_content,
+            "realtime_quote_raw": self._safe_to_dict(realtime_quote),
+            "chip_distribution_raw": self._safe_to_dict(chip_data),
+        }
+
+    @staticmethod
+    def _safe_to_dict(value: Any) -> Optional[Dict[str, Any]]:
+        """
+        安全转换为字典
+        """
+        if value is None:
+            return None
+        if hasattr(value, "to_dict"):
+            try:
+                return value.to_dict()
+            except Exception:
+                return None
+        if hasattr(value, "__dict__"):
+            try:
+                return dict(value.__dict__)
+            except Exception:
+                return None
+        return None
+
+    def _resolve_query_source(self, query_source: Optional[str]) -> str:
+        """
+        解析请求来源。
+
+        优先级（从高到低）：
+        1. 显式传入的 query_source：调用方明确指定时优先使用，便于覆盖推断结果或兼容未来 source_message 来自非 bot 的场景
+        2. 存在 source_message 时推断为 "bot"：当前约定为机器人会话上下文
+        3. 存在 query_id 时推断为 "web"：Web 触发的请求会带上 query_id
+        4. 默认 "system"：定时任务或 CLI 等无上述上下文时
+
+        Args:
+            query_source: 调用方显式指定的来源，如 "bot" / "web" / "cli" / "system"
+
+        Returns:
+            归一化后的来源标识字符串，如 "bot" / "web" / "cli" / "system"
+        """
+        if query_source:
+            return query_source
+        if self.source_message:
+            return "bot"
+        if self.query_id:
+            return "web"
+        return "system"
+
+    def _build_query_context(self) -> Dict[str, str]:
+        """
+        生成用户查询关联信息
+        """
+        context: Dict[str, str] = {
+            "query_id": self.query_id or "",
+            "query_source": self.query_source or "",
+        }
+
+        if self.source_message:
+            context.update({
+                "requester_platform": self.source_message.platform or "",
+                "requester_user_id": self.source_message.user_id or "",
+                "requester_user_name": self.source_message.user_name or "",
+                "requester_chat_id": self.source_message.chat_id or "",
+                "requester_message_id": self.source_message.message_id or "",
+                "requester_query": self.source_message.content or "",
+            })
+
+        return context
     
     def process_single_stock(
         self,
@@ -407,7 +533,7 @@ class StockAnalysisPipeline:
                 logger.info(f"[{code}] 跳过 AI 分析（dry-run 模式）")
                 return None
             
-            result = self.analyze_stock(code)
+            result = self.analyze_stock(code, report_type)
             
             if result:
                 logger.info(

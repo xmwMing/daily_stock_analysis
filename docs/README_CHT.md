@@ -208,6 +208,7 @@
 | `/` | GET | 配置管理頁面 |
 | `/health` | GET | 健康檢查 |
 | `/analysis?code=xxx` | GET | 觸發單隻股票異步分析 |
+| `/analysis/history` | GET | 查詢分析歷史記錄 |
 | `/tasks` | GET | 查詢所有任務狀態 |
 | `/task?id=xxx` | GET | 查詢單個任務狀態 |
 

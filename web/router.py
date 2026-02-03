@@ -309,6 +309,12 @@ def create_default_router() -> Router:
         lambda q: api_handler.handle_analysis(q),
         "触发股票分析"
     )
+
+    router.register(
+        "/analysis/history", "GET",
+        lambda q: api_handler.handle_analysis_history(q),
+        "查询分析历史"
+    )
     
     router.register(
         "/tasks", "GET",

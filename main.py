@@ -39,6 +39,7 @@ import argparse
 import logging
 import sys
 import time
+import uuid
 from datetime import datetime, timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -213,6 +214,12 @@ def parse_arguments() -> argparse.Namespace:
         help='仅启动 WebUI 服务，不自动执行分析（通过 /analysis API 手动触发）'
     )
 
+    parser.add_argument(
+        '--no-context-snapshot',
+        action='store_true',
+        help='不保存分析上下文快照'
+    )
+    
     return parser.parse_args()
 
 
@@ -232,9 +239,16 @@ def run_full_analysis(
             config.single_stock_notify = True
 
         # 创建调度器
+        save_context_snapshot = None
+        if getattr(args, 'no_context_snapshot', False):
+            save_context_snapshot = False
+        query_id = uuid.uuid4().hex
         pipeline = StockAnalysisPipeline(
             config=config,
-            max_workers=args.workers
+            max_workers=args.workers,
+            query_id=query_id,
+            query_source="cli",
+            save_context_snapshot=save_context_snapshot
         )
 
         # 1. 运行个股分析

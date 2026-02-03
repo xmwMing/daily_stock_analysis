@@ -206,6 +206,17 @@ python main.py --stocks AAPL,TSLA,GOOGL
 python main.py --market-review
 ```
 
+### API Endpoints
+
+| Endpoint | Method | Description |
+|------|------|------|
+| `/` | GET | Configuration page |
+| `/health` | GET | Health check |
+| `/analysis?code=xxx` | GET | Trigger async analysis for a single stock |
+| `/analysis/history` | GET | Query analysis history records |
+| `/tasks` | GET | Query all task statuses |
+| `/task?id=xxx` | GET | Query a single task status |
+
 ---
 
 ## 📱 Supported Notification Channels
@@ -448,4 +459,4 @@ The developers of this tool are not liable for any financial losses resulting fr
 - GitHub Issues: [Report bugs or request features](https://github.com/ZhuLinsen/daily_stock_analysis/issues)
 - Discussions: [Join discussions](https://github.com/ZhuLinsen/daily_stock_analysis/discussions)
 
----
+----
