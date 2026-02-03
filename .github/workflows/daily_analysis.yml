@@ -135,6 +135,7 @@ jobs:
           HOT_STOCKS_ENABLED: ${{ vars.HOT_STOCKS_ENABLED || secrets.HOT_STOCKS_ENABLED || 'true' }}
           HOT_STOCK_FETCH_COUNT: ${{ vars.HOT_STOCK_FETCH_COUNT || secrets.HOT_STOCK_FETCH_COUNT || '10' }}
           HOT_STOCK_TOP_N: ${{ vars.HOT_STOCK_TOP_N || secrets.HOT_STOCK_TOP_N || '5' }}
+          INCLUDE_STAR_STOCK: ${{ vars.INCLUDE_STAR_STOCK || secrets.INCLUDE_STAR_STOCK || 'false' }}
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
 
           # ==========================================
@@ -160,6 +161,7 @@ jobs:
           echo "🎯 运行模式: $MODE"
           echo "📊 自选股: $STOCK_LIST"
           echo "📝 报告类型: $REPORT_TYPE"
+          echo "🌟 科创板过滤: $([ "$INCLUDE_STAR_STOCK" = "true" ] && echo '❌ 包含科创板' || echo '✅ 过滤科创板')"
           echo ""
           echo "=========================================="
           echo "📋 配置检查"
