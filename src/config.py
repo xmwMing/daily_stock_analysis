@@ -515,8 +515,8 @@ HOT_STOCK_CONFIG = {
     'filter': {
         'min_price': 3.0,        # 最低价格（元）
         'max_price': 300.0,      # 最高价格（元）
-        'min_market_cap': 5e9,   # 最小市值（50亿元）
         'min_list_days': 90,     # 最少上市天数
+        'include_star_stock': os.getenv('INCLUDE_STAR_STOCK', 'true').lower() == 'true',  # 是否包含科创板股票
     },
 
     # 评分权重

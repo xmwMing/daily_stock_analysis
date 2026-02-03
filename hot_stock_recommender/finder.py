@@ -56,6 +56,7 @@ class HotStockFinder:
         self.min_price = filter_config.get('min_price', 3.0)
         self.max_price = filter_config.get('max_price', 300.0)
         self.min_list_days = filter_config.get('min_list_days', 90)
+        self.include_star_stock = filter_config.get('include_star_stock', True)
 
         # 从配置加载获取数量
         self.fetch_count = HOT_STOCK_CONFIG.get('fetch_count', 30)
@@ -72,7 +73,8 @@ class HotStockFinder:
         logger.info(f"HotStockFinder 初始化完成: 缓存TTL={cache_ttl}秒, "
                    f"每个榜单获取{self.fetch_count}只, "
                    f"过滤条件=[价格:{self.min_price}-{self.max_price}元, "
-                   f"上市>={self.min_list_days}天]")
+                   f"上市>={self.min_list_days}天, "
+                   f"科创板股票={self.include_star_stock}]")
 
     def find_hot_stocks(self) -> List[StockInfo]:
         """
@@ -630,6 +632,7 @@ class HotStockFinder:
             'price_too_high': 0,
             'market_cap_too_small': 0,
             'newly_listed': 0,
+            'star_stock': 0,
         }
 
         for stock in stocks:
@@ -637,6 +640,12 @@ class HotStockFinder:
             if self._is_st_stock(stock.name):
                 filter_stats['st_stock'] += 1
                 logger.debug(f"过滤ST股票: {stock.code} {stock.name}")
+                continue
+
+            # 过滤科创板股票
+            if not self.include_star_stock and self._is_star_stock(stock.code):
+                filter_stats['star_stock'] += 1
+                logger.debug(f"过滤科创板股票: {stock.code} {stock.name}")
                 continue
 
             # 过滤价格范围
@@ -667,7 +676,8 @@ class HotStockFinder:
                    f"低价股={filter_stats['price_too_low']}, "
                    f"高价股={filter_stats['price_too_high']}, "
                    f"小市值={filter_stats['market_cap_too_small']}, "
-                   f"新股={filter_stats['newly_listed']}")
+                   f"新股={filter_stats['newly_listed']}, "
+                   f"科创板股票={filter_stats['star_stock']}")
 
         return filtered
 
@@ -700,6 +710,28 @@ class HotStockFinder:
                 return True
 
         return False
+
+    def _is_star_stock(self, code: str) -> bool:
+        """
+        判断是否为科创板股票
+
+        科创板股票特征：
+        - 股票代码以 688 开头
+
+        Args:
+            code: 股票代码
+
+        Returns:
+            True 表示是科创板股票，False 表示不是
+        """
+        if not code:
+            return False
+
+        # 清理股票代码，移除前缀
+        clean_code = code.replace('SH', '').replace('SZ', '')
+
+        # 检查是否以 688 开头
+        return clean_code.startswith('688')
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """
