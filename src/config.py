@@ -126,7 +126,6 @@ class Config:
 
     # 是否保存分析上下文快照（用于历史回溯）
     save_context_snapshot: bool = True
-
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
     log_level: str = "INFO"  # 日志级别
