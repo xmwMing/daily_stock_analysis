@@ -280,7 +280,8 @@ def run_full_analysis(
 
         # 3. 运行热门股票推荐（新增）
         hot_stock_report = ""
-        if not args.dry_run and config.hot_stocks_enabled:  # 只在非 dry-run 模式下运行，且启用了热门股票推荐
+        # stocks-only 模式(--no-market-review)跳过热门股票推荐
+        if not args.dry_run and config.hot_stocks_enabled and not getattr(args, 'no_market_review', False):
             try:
                 logger.info("开始热门股票推荐...")
                 from hot_stock_recommender import HotStockRecommender
