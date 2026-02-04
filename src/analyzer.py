@@ -1241,7 +1241,7 @@ class GeminiAnalyzer:
         json_str = re.sub(r',\s*]', ']', json_str)
 
         # 确保布尔值是小写
-        json_str = json_str.replace('True', 'true').replace('False', 'false')=======
+        json_str = json_str.replace('True', 'true').replace('False', 'false')
 
         # fix by json-repair
         json_str = repair_json(json_str)
