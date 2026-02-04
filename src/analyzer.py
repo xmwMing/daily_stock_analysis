@@ -15,6 +15,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
+from json_repair import repair_json
 
 from tenacity import (
     retry,
@@ -1241,7 +1242,8 @@ class GeminiAnalyzer:
 
         # 确保布尔值是小写
         json_str = json_str.replace('True', 'true').replace('False', 'false')
-
+        # fix by json-repair
+        json_str = repair_json(json_str)
         return json_str
 
     def _parse_text_response(

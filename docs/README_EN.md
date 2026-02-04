@@ -90,6 +90,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 |------------|------|:----:|
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token (Get from @BotFather) | Optional |
 | `TELEGRAM_CHAT_ID` | Telegram Chat ID | Optional |
+| `TELEGRAM_MESSAGE_THREAD_ID` | Telegram Topic ID (For sending to topics) | Optional |
 | `DISCORD_WEBHOOK_URL` | Discord Webhook URL | Optional |
 | `DISCORD_BOT_TOKEN` | Discord Bot Token (choose one with Webhook) | Optional |
 | `DISCORD_CHANNEL_ID` | Discord Channel ID (required when using Bot) | Optional |
@@ -205,6 +206,17 @@ python main.py --stocks AAPL,TSLA,GOOGL
 # Market review only
 python main.py --market-review
 ```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|------|------|------|
+| `/` | GET | Configuration page |
+| `/health` | GET | Health check |
+| `/analysis?code=xxx` | GET | Trigger async analysis for a single stock |
+| `/analysis/history` | GET | Query analysis history records |
+| `/tasks` | GET | Query all task statuses |
+| `/task?id=xxx` | GET | Query a single task status |
 
 ---
 
@@ -448,4 +460,4 @@ The developers of this tool are not liable for any financial losses resulting fr
 - GitHub Issues: [Report bugs or request features](https://github.com/ZhuLinsen/daily_stock_analysis/issues)
 - Discussions: [Join discussions](https://github.com/ZhuLinsen/daily_stock_analysis/discussions)
 
----
+----

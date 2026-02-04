@@ -90,6 +90,7 @@
 |------------|------|:----:|
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（@BotFather 獲取） | 可選 |
 | `TELEGRAM_CHAT_ID` | Telegram Chat ID | 可選 |
+| `TELEGRAM_MESSAGE_THREAD_ID` | Telegram Topic ID (用於發送到子話題) | 可選 |
 | `DISCORD_WEBHOOK_URL` | Discord Webhook URL | 可選 |
 | `DISCORD_BOT_TOKEN` | Discord Bot Token（與 Webhook 二選一） | 可選 |
 | `DISCORD_CHANNEL_ID` | Discord Channel ID（使用 Bot 時需要） | 可選 |
@@ -208,6 +209,7 @@
 | `/` | GET | 配置管理頁面 |
 | `/health` | GET | 健康檢查 |
 | `/analysis?code=xxx` | GET | 觸發單隻股票異步分析 |
+| `/analysis/history` | GET | 查詢分析歷史記錄 |
 | `/tasks` | GET | 查詢所有任務狀態 |
 | `/task?id=xxx` | GET | 查詢單個任務狀態 |
 
