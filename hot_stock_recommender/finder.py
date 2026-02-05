@@ -74,7 +74,7 @@ class HotStockFinder:
                    f"每个榜单获取{self.fetch_count}只, "
                    f"过滤条件=[价格:{self.min_price}-{self.max_price}元, "
                    f"上市>={self.min_list_days}天, "
-                   f"科创板股票={self.include_star_stock}]")
+                   f"科创板/创业板股票={self.include_star_stock}]")
 
     def find_hot_stocks(self) -> List[StockInfo]:
         """
@@ -711,18 +711,20 @@ class HotStockFinder:
 
         return False
 
-    def _is_star_stock(self, code: str) -> bool:
+    def _is_filtered_board_stock(self, code: str) -> bool:
         """
-        判断是否为科创板股票
+        判断是否为科创板或创业板股票
 
         科创板股票特征：
         - 股票代码以 688 开头
+        创业板股票特征：
+        - 股票代码以 300 开头
 
         Args:
             code: 股票代码
 
         Returns:
-            True 表示是科创板股票，False 表示不是
+            True 表示是科创板或创业板股票，False 表示不是
         """
         if not code:
             return False
@@ -730,8 +732,8 @@ class HotStockFinder:
         # 清理股票代码，移除前缀
         clean_code = code.replace('SH', '').replace('SZ', '')
 
-        # 检查是否以 688 开头
-        return clean_code.startswith('688')
+        # 检查是否以 688 (科创板) 或 300 (创业板) 开头
+        return clean_code.startswith('688') or clean_code.startswith('300')
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """
