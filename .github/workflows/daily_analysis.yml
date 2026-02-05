@@ -122,6 +122,9 @@ jobs:
           ASTRBOT_URL: ${{ secrets.ASTRBOT_URL }}
           ASTRBOT_TOKEN: ${{ secrets.ASTRBOT_TOKEN }}
 
+          # 方式十一：Server酱3
+          SERVERCHAN3_SENDKEY: ${{ secrets.SERVERCHAN3_SENDKEY }}
+
           # ==========================================
           # 自选股配置
           # ==========================================
