@@ -356,6 +356,7 @@ git push -u origin main
 | `TELEGRAM_MESSAGE_THREAD_ID` | Telegram Topic ID | 可选* |
 | `EMAIL_SENDER` | 发件人邮箱 | 可选* |
 | `EMAIL_PASSWORD` | 邮箱授权码 | 可选* |
+| `SERVERCHAN3_SENDKEY` | Server酱³ Sendkey | 可选* |
 | `CUSTOM_WEBHOOK_URLS` | 自定义 Webhook（多个逗号分隔） | 可选* |
 | `STOCK_LIST` | 自选股列表，如 `600519,300750` | ✅ |
 | `TAVILY_API_KEYS` | Tavily 搜索 API Key | 推荐 |
