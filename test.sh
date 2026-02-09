@@ -248,7 +248,6 @@ test_syntax() {
     python3 -m py_compile main.py src/config.py src/notification.py \
         data_provider/akshare_fetcher.py \
         data_provider/yfinance_fetcher.py \
-        web/handlers.py \
         bot/commands/analyze.py
 
     success "语法检查通过"

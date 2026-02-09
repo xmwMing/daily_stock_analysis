@@ -1,19 +1,9 @@
 # CI 流程 - Pull Request 自动检测
-# 当有 PR 提交或推送到 main 分支时自动运行
+# 仅在 PR 运行，main 分支由 docker-publish 执行发布构建
 
 name: CI
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '**.py'
-      - 'requirements.txt'
-      - 'pyproject.toml'
-      - 'setup.cfg'
-      - '.github/workflows/**'
-      - 'Dockerfile'
-      - 'docker-compose.yml'
   pull_request:
     branches: [main]
     paths:
@@ -24,6 +14,10 @@ on:
       - '.github/workflows/**'
       - 'Dockerfile'
       - 'docker-compose.yml'
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ==================== 核心检查（必须通过）====================

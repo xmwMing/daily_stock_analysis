@@ -79,6 +79,7 @@ class StockAnalysisPipeline:
         self.search_service = SearchService(
             bocha_keys=self.config.bocha_api_keys,
             tavily_keys=self.config.tavily_api_keys,
+            brave_keys=self.config.brave_api_keys,
             serpapi_keys=self.config.serpapi_keys,
         )
         
@@ -284,6 +285,12 @@ class StockAnalysisPipeline:
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
 
+            # Step 7.5: 填充分析时的价格信息到 result
+            if result:
+                realtime_data = enhanced_context.get('realtime', {})
+                result.current_price = realtime_data.get('price')
+                result.change_pct = realtime_data.get('change_pct')
+
             # Step 8: 保存分析历史记录
             if result:
                 try:
@@ -349,6 +356,7 @@ class StockAnalysisPipeline:
             enhanced['realtime'] = {
                 'name': getattr(realtime_quote, 'name', ''),
                 'price': getattr(realtime_quote, 'price', None),
+                'change_pct': getattr(realtime_quote, 'change_pct', None),
                 'volume_ratio': volume_ratio,
                 'volume_ratio_desc': self._describe_volume_ratio(volume_ratio) if volume_ratio else '无数据',
                 'turnover_rate': getattr(realtime_quote, 'turnover_rate', None),

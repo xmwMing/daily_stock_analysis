@@ -26,6 +26,7 @@ from typing import List, Dict, Any, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
+from email.utils import formataddr
 from enum import Enum
 
 import requests
@@ -154,6 +155,7 @@ class NotificationService:
         # 邮件配置
         self._email_config = {
             'sender': config.email_sender,
+            'sender_name': getattr(config, 'email_sender_name', 'daily_stock_analysis股票分析助手'),
             'password': config.email_password,
             'receivers': config.email_receivers or ([config.email_sender] if config.email_sender else []),
         }
@@ -408,6 +410,8 @@ class NotificationService:
                 f"**操作建议：{result.operation_advice}** | **综合评分：{result.sentiment_score}分** | **趋势预测：{result.trend_prediction}** | **置信度：{confidence_stars}**",
                 "",
             ])
+
+            self._append_market_snapshot(report_lines, result)
             
             # 核心看点
             if hasattr(result, 'key_points') and result.key_points:
@@ -533,27 +537,69 @@ class NotificationService:
         
         return "\n".join(report_lines)
     
+    @staticmethod
+    def _escape_md(name: str) -> str:
+        """Escape markdown special characters in stock names (e.g. *ST → \\*ST)."""
+        return name.replace('*', r'\*') if name else name
+
+    @staticmethod
+    def _clean_sniper_value(value: Any) -> str:
+        """Normalize sniper point values and remove redundant label prefixes."""
+        if value is None:
+            return 'N/A'
+        if isinstance(value, (int, float)):
+            return str(value)
+        if not isinstance(value, str):
+            return str(value)
+        if not value or value == 'N/A':
+            return value
+        prefixes = ['理想买入点：', '次优买入点：', '止损位：', '目标位：',
+                     '理想买入点:', '次优买入点:', '止损位:', '目标位:']
+        for prefix in prefixes:
+            if value.startswith(prefix):
+                return value[len(prefix):]
+        return value
+
     def _get_signal_level(self, result: AnalysisResult) -> tuple:
         """
-        根据操作建议获取信号等级和颜色
-        
+        Get signal level and color based on operation advice.
+
+        Priority: advice string takes precedence over score.
+        Score-based fallback is used only when advice doesn't match
+        any known value.
+
         Returns:
-            (信号文字, emoji, 颜色标记)
+            (signal_text, emoji, color_tag)
         """
         advice = result.operation_advice
         score = result.sentiment_score
-        
-        if advice in ['强烈买入'] or score >= 80:
+
+        # Advice-first lookup (exact match takes priority)
+        advice_map = {
+            '强烈买入': ('强烈买入', '💚', '强买'),
+            '买入': ('买入', '🟢', '买入'),
+            '加仓': ('买入', '🟢', '买入'),
+            '持有': ('持有', '🟡', '持有'),
+            '观望': ('观望', '⚪', '观望'),
+            '减仓': ('减仓', '🟠', '减仓'),
+            '卖出': ('卖出', '🔴', '卖出'),
+            '强烈卖出': ('卖出', '🔴', '卖出'),
+        }
+        if advice in advice_map:
+            return advice_map[advice]
+
+        # Score-based fallback when advice is unrecognized
+        if score >= 80:
             return ('强烈买入', '💚', '强买')
-        elif advice in ['买入', '加仓'] or score >= 65:
+        elif score >= 65:
             return ('买入', '🟢', '买入')
-        elif advice in ['持有'] or 55 <= score < 65:
+        elif score >= 55:
             return ('持有', '🟡', '持有')
-        elif advice in ['观望'] or 45 <= score < 55:
+        elif score >= 45:
             return ('观望', '⚪', '观望')
-        elif advice in ['减仓'] or 35 <= score < 45:
+        elif score >= 35:
             return ('减仓', '🟠', '减仓')
-        elif advice in ['卖出', '强烈卖出'] or score < 35:
+        elif score < 35:
             return ('卖出', '🔴', '卖出')
         else:
             return ('观望', '⚪', '观望')
@@ -600,9 +646,10 @@ class NotificationService:
                 "",
             ])
             for r in sorted_results:
-                emoji = r.get_emoji()
+                _, signal_emoji, _ = self._get_signal_level(r)
+                display_name = self._escape_md(r.name)
                 report_lines.append(
-                    f"{emoji} **{r.name}({r.code})**: {r.operation_advice} | "
+                    f"{signal_emoji} **{display_name}({r.code})**: {r.operation_advice} | "
                     f"评分 {r.sentiment_score} | {r.trend_prediction}"
                 )
             report_lines.extend([
@@ -616,8 +663,9 @@ class NotificationService:
             signal_text, signal_emoji, signal_tag = self._get_signal_level(result)
             dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
             
-            # 股票名称（优先使用 dashboard 或 result 中的名称）
-            stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
+            # 股票名称（优先使用 dashboard 或 result 中的名称，转义 *ST 等特殊字符）
+            raw_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
+            stock_name = self._escape_md(raw_name)
             
             report_lines.extend([
                 f"## {signal_emoji} {stock_name} ({result.code})",
@@ -689,6 +737,8 @@ class NotificationService:
                     f"| 💼 **持仓者** | {pos_advice.get('has_position', '继续持有')} |",
                     "",
                 ])
+
+            self._append_market_snapshot(report_lines, result)
             
             # ========== 数据透视 ==========
             data_persp = dashboard.get('data_perspective', {}) if dashboard else {}
@@ -763,10 +813,10 @@ class NotificationService:
                         "",
                         "| 点位类型 | 价格 |",
                         "|---------|------|",
-                        f"| 🎯 理想买入点 | {sniper.get('ideal_buy', 'N/A')} |",
-                        f"| 🔵 次优买入点 | {sniper.get('secondary_buy', 'N/A')} |",
-                        f"| 🛑 止损位 | {sniper.get('stop_loss', 'N/A')} |",
-                        f"| 🎊 目标位 | {sniper.get('take_profit', 'N/A')} |",
+                        f"| 🎯 理想买入点 | {self._clean_sniper_value(sniper.get('ideal_buy', 'N/A'))} |",
+                        f"| 🔵 次优买入点 | {self._clean_sniper_value(sniper.get('secondary_buy', 'N/A'))} |",
+                        f"| 🛑 止损位 | {self._clean_sniper_value(sniper.get('stop_loss', 'N/A'))} |",
+                        f"| 🎊 目标位 | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
                         "",
                     ])
                 
@@ -878,6 +928,7 @@ class NotificationService:
             
             # 股票名称
             stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
+            stock_name = self._escape_md(stock_name)
             
             # 标题行：信号等级 + 股票名称
             lines.append(f"### {signal_emoji} **{signal_text}** | {stock_name}({result.code})")
@@ -1058,8 +1109,9 @@ class NotificationService:
         battle = dashboard.get('battle_plan', {}) if dashboard else {}
         intel = dashboard.get('intelligence', {}) if dashboard else {}
         
-        # 股票名称
-        stock_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
+        # 股票名称（转义 *ST 等特殊字符）
+        raw_name = result.name if result.name and not result.name.startswith('股票') else f'股票{result.code}'
+        stock_name = self._escape_md(raw_name)
         
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code})",
@@ -1067,6 +1119,8 @@ class NotificationService:
             f"> {report_date} | 评分: **{result.sentiment_score}** | {result.trend_prediction}",
             "",
         ]
+
+        self._append_market_snapshot(lines, result)
         
         # 核心决策（一句话）
         one_sentence = core.get('one_sentence', result.analysis_summary) if core else result.analysis_summary
@@ -1150,6 +1204,48 @@ class NotificationService:
         ])
         
         return "\n".join(lines)
+
+    # Display name mapping for realtime data sources
+    _SOURCE_DISPLAY_NAMES = {
+        "tencent": "腾讯财经",
+        "akshare_em": "东方财富",
+        "akshare_sina": "新浪财经",
+        "akshare_qq": "腾讯财经",
+        "efinance": "东方财富(efinance)",
+        "tushare": "Tushare Pro",
+        "sina": "新浪财经",
+        "fallback": "降级兜底",
+    }
+
+    def _append_market_snapshot(self, lines: List[str], result: AnalysisResult) -> None:
+        snapshot = getattr(result, 'market_snapshot', None)
+        if not snapshot:
+            return
+
+        lines.extend([
+            "### 📈 当日行情",
+            "",
+            "| 收盘 | 昨收 | 开盘 | 最高 | 最低 | 涨跌幅 | 涨跌额 | 振幅 | 成交量 | 成交额 |",
+            "|------|------|------|------|------|-------|-------|------|--------|--------|",
+            f"| {snapshot.get('close', 'N/A')} | {snapshot.get('prev_close', 'N/A')} | "
+            f"{snapshot.get('open', 'N/A')} | {snapshot.get('high', 'N/A')} | "
+            f"{snapshot.get('low', 'N/A')} | {snapshot.get('pct_chg', 'N/A')} | "
+            f"{snapshot.get('change_amount', 'N/A')} | {snapshot.get('amplitude', 'N/A')} | "
+            f"{snapshot.get('volume', 'N/A')} | {snapshot.get('amount', 'N/A')} |",
+        ])
+
+        if "price" in snapshot:
+            raw_source = snapshot.get('source', 'N/A')
+            display_source = self._SOURCE_DISPLAY_NAMES.get(raw_source, raw_source)
+            lines.extend([
+                "",
+                "| 当前价 | 量比 | 换手率 | 行情来源 |",
+                "|-------|------|--------|----------|",
+                f"| {snapshot.get('price', 'N/A')} | {snapshot.get('volume_ratio', 'N/A')} | "
+                f"{snapshot.get('turnover_rate', 'N/A')} | {display_source} |",
+            ])
+
+        lines.append("")
     
     def send_to_wechat(self, content: str) -> bool:
         """
@@ -1188,7 +1284,11 @@ class NotificationService:
             logger.warning("企业微信 Webhook 未配置，跳过推送")
             return False
         
-        max_bytes = self._wechat_max_bytes  # 从配置读取，默认 4000 字节
+        # 根据消息类型动态限制上限，避免 text 类型超过企业微信 2048 字节限制
+        if self._wechat_msg_type == 'text':
+            max_bytes = min(self._wechat_max_bytes, 2000)  # 预留一定字节给系统/分页标记
+        else:
+            max_bytes = self._wechat_max_bytes  # markdown 默认 4000 字节
         
         # 检查字节长度，超长则分批发送
         content_bytes = len(content.encode('utf-8'))
@@ -1249,12 +1349,13 @@ class NotificationService:
         current_chunk = []
         current_bytes = 0
         separator_bytes = get_bytes(separator)
+        effective_max_bytes = max_bytes - 50  # 预留分页标记空间，避免边界超限
         
         for section in sections:
             section_bytes = get_bytes(section) + separator_bytes
             
             # 如果单个 section 就超长，需要强制截断
-            if section_bytes > max_bytes:
+            if section_bytes > effective_max_bytes:
                 # 先发送当前积累的内容
                 if current_chunk:
                     chunks.append(separator.join(current_chunk))
@@ -1262,13 +1363,13 @@ class NotificationService:
                     current_bytes = 0
                 
                 # 强制截断这个超长 section（按字节截断）
-                truncated = self._truncate_to_bytes(section, max_bytes - 200)
+                truncated = self._truncate_to_bytes(section, effective_max_bytes - 200)
                 truncated += "\n\n...(本段内容过长已截断)"
                 chunks.append(truncated)
                 continue
             
             # 检查加入后是否超长
-            if current_bytes + section_bytes > max_bytes:
+            if current_bytes + section_bytes > effective_max_bytes:
                 # 保存当前块，开始新块
                 if current_chunk:
                     chunks.append(separator.join(current_chunk))
@@ -1711,7 +1812,7 @@ class NotificationService:
             # 构建邮件
             msg = MIMEMultipart('alternative')
             msg['Subject'] = Header(subject, 'utf-8')
-            msg['From'] = sender
+            msg['From'] = formataddr((self._email_config.get('sender_name', '股票分析助手'), sender))
             msg['To'] = ', '.join(receivers)
             
             # 添加纯文本和 HTML 两个版本

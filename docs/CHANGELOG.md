@@ -5,6 +5,65 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [3.0.5] - 2026-02-08
+
+### 修复
+- 🐛 修复信号 emoji 与建议不一致的问题（复合建议如"卖出/观望"未正确映射）
+- 🐛 修复 `*ST` 股票名在微信/Dashboard 中 markdown 转义问题
+- 🐛 修复 `idx.amount` 为 None 时大盘复盘 TypeError
+- 🐛 修复分析 API 返回 `report=None` 及 ReportStrategy 类型不一致问题
+- 🐛 修复 Tushare 返回类型错误（dict → UnifiedRealtimeQuote）及 API 端点指向
+
+### 新增
+- 📊 大盘复盘报告注入结构化数据（涨跌统计、指数表格、板块排名）
+- 🔍 搜索结果 TTL 缓存（500 条上限，FIFO 淘汰）
+- 🔧 Tushare Token 存在时自动注入实时行情优先级
+- 📰 新闻摘要截断长度 50→200 字
+
+### 优化
+- ⚡ 补充行情字段请求限制为最多 1 次，减少无效请求
+
+## [3.0.4] - 2026-02-07
+
+### 新增
+- 📈 **回测引擎** (PR #269)
+  - 新增基于历史分析记录的回测系统，支持收益率、胜率、最大回撤等指标评估
+  - WebUI 集成回测结果展示
+
+## [3.0.3] - 2026-02-07
+
+### 修复
+- 🐛 修复狙击点位数据解析错误问题 (PR #271)
+
+## [3.0.2] - 2026-02-06
+
+### 新增
+- ✉️ 可配置邮件发送者名称 (PR #272)
+- 🌐 外国股票支持英文关键词搜索
+
+## [3.0.1] - 2026-02-06
+
+### 修复
+- 🐛 修复 ETF 实时行情获取、市场数据回退、企业微信消息分块问题
+- 🔧 CI 流程简化
+
+## [3.0.0] - 2026-02-06
+
+### 移除
+- 🗑️ **移除旧版 WebUI**
+  - 删除基于 `http.server.ThreadingHTTPServer` 的旧版 WebUI（`web/` 包）
+  - 旧版 WebUI 的功能已完全被 FastAPI（`api/`）+ React 前端替代
+  - `--webui` / `--webui-only` 命令行参数标记为弃用，自动重定向到 `--serve` / `--serve-only`
+  - `WEBUI_ENABLED` / `WEBUI_HOST` / `WEBUI_PORT` 环境变量保持兼容，自动转发到 FastAPI 服务
+  - `webui.py` 保留为兼容入口，启动时直接调用 FastAPI 后端
+  - Docker Compose 中移除 `webui` 服务定义，统一使用 `server` 服务
+
+### 变更
+- ♻️ **服务层重构**
+  - 将 `web/services.py` 中的异步任务服务迁移至 `src/services/task_service.py`
+  - Bot 分析命令（`bot/commands/analyze.py`）改为使用 `src.services.task_service`
+  - Docker 环境变量 `WEBUI_HOST`/`WEBUI_PORT` 更名为 `API_HOST`/`API_PORT`（旧名仍兼容）
+
 ## [2.3.0] - 2026-02-01
 
 ### 新增

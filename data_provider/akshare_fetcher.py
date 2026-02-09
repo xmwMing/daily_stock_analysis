@@ -1367,56 +1367,94 @@ class AkshareFetcher(BaseFetcher):
 
     def get_market_stats(self) -> Optional[Dict[str, Any]]:
         """
-        获取市场涨跌统计 (东财接口)
+        获取市场涨跌统计
+
+        数据源优先级：
+        1. 东财接口 (ak.stock_zh_a_spot_em)
+        2. 新浪接口 (ak.stock_zh_a_spot)
         """
         import akshare as ak
+
+        # 优先东财接口
         try:
             self._set_random_user_agent()
             self._enforce_rate_limit()
 
-            # 获取全部A股实时行情
+            logger.info("[API调用] ak.stock_zh_a_spot_em() 获取市场统计...")
             df = ak.stock_zh_a_spot_em()
-
             if df is not None and not df.empty:
-                change_col = '涨跌幅'
-                if change_col in df.columns:
-                    # 转换为数值
-                    df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
-
-                    stats = {
-                        'up_count': len(df[df[change_col] > 0]),
-                        'down_count': len(df[df[change_col] < 0]),
-                        'flat_count': len(df[df[change_col] == 0]),
-                        'limit_up_count': len(df[df[change_col] >= 9.9]),
-                        'limit_down_count': len(df[df[change_col] <= -9.9]),
-                        'total_amount': 0.0
-                    }
-
-                    # 计算两市成交额
-                    amount_col = '成交额'
-                    if amount_col in df.columns:
-                        df[amount_col] = pd.to_numeric(df[amount_col], errors='coerce')
-                        stats['total_amount'] = df[amount_col].sum() / 1e8  # 转为亿元
-
-                    return stats
-            return None
-
+                return self._calc_market_stats(df, change_col='涨跌幅', amount_col='成交额')
         except Exception as e:
-            logger.error(f"[Akshare] 获取市场统计失败: {e}")
+            logger.warning(f"[Akshare] 东财接口获取市场统计失败: {e}，尝试新浪接口")
+
+        # 东财失败后，尝试新浪接口
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.stock_zh_a_spot() 获取市场统计(新浪)...")
+            df = ak.stock_zh_a_spot()
+            if df is not None and not df.empty:
+                change_col = None
+                for col in ['change_percent', 'changepercent', '涨跌幅', 'trade_ratio']:
+                    if col in df.columns:
+                        change_col = col
+                        break
+
+                amount_col = None
+                for col in ['amount', '成交额', 'trade_amount']:
+                    if col in df.columns:
+                        amount_col = col
+                        break
+
+                if change_col:
+                    return self._calc_market_stats(df, change_col=change_col, amount_col=amount_col)
+        except Exception as e:
+            logger.error(f"[Akshare] 新浪接口获取市场统计也失败: {e}")
+
+        return None
+
+    def _calc_market_stats(
+        self,
+        df: pd.DataFrame,
+        change_col: str,
+        amount_col: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """从行情 DataFrame 计算涨跌统计。"""
+        if change_col not in df.columns:
             return None
+
+        df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
+        stats = {
+            'up_count': len(df[df[change_col] > 0]),
+            'down_count': len(df[df[change_col] < 0]),
+            'flat_count': len(df[df[change_col] == 0]),
+            'limit_up_count': len(df[df[change_col] >= 9.9]),
+            'limit_down_count': len(df[df[change_col] <= -9.9]),
+            'total_amount': 0.0,
+        }
+        if amount_col and amount_col in df.columns:
+            df[amount_col] = pd.to_numeric(df[amount_col], errors='coerce')
+            stats['total_amount'] = df[amount_col].sum() / 1e8
+        return stats
 
     def get_sector_rankings(self, n: int = 5) -> Optional[Tuple[List[Dict], List[Dict]]]:
         """
-        获取板块涨跌榜 (东财接口)
+        获取板块涨跌榜
+
+        数据源优先级：
+        1. 东财接口 (ak.stock_board_industry_name_em)
+        2. 新浪接口 (ak.stock_sector_spot)
         """
         import akshare as ak
+
+        # 优先东财接口
         try:
             self._set_random_user_agent()
             self._enforce_rate_limit()
 
-            # 获取行业板块行情
+            logger.info("[API调用] ak.stock_board_industry_name_em() 获取板块排行...")
             df = ak.stock_board_industry_name_em()
-
             if df is not None and not df.empty:
                 change_col = '涨跌幅'
                 if change_col in df.columns:
@@ -1430,7 +1468,6 @@ class AkshareFetcher(BaseFetcher):
                         for _, row in top.iterrows()
                     ]
 
-                    # 跌幅前n
                     bottom = df.nsmallest(n, change_col)
                     bottom_sectors = [
                         {'name': row['板块名称'], 'change_pct': row[change_col]}
@@ -1438,10 +1475,49 @@ class AkshareFetcher(BaseFetcher):
                     ]
 
                     return top_sectors, bottom_sectors
-            return None
-
         except Exception as e:
-            logger.error(f"[Akshare] 获取板块排行失败: {e}")
+            logger.warning(f"[Akshare] 东财接口获取板块排行失败: {e}，尝试新浪接口")
+
+        # 东财失败后，尝试新浪接口
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.stock_sector_spot() 获取板块排行(新浪)...")
+            df = ak.stock_sector_spot(indicator='新浪行业')
+            if df is None or df.empty:
+                return None
+
+            change_col = None
+            for col in ['涨跌幅', 'change_pct', '涨幅']:
+                if col in df.columns:
+                    change_col = col
+                    break
+
+            name_col = None
+            for col in ['板块', '板块名称', 'label', 'name']:
+                if col in df.columns:
+                    name_col = col
+                    break
+
+            if not change_col or not name_col:
+                return None
+
+            df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
+            df = df.dropna(subset=[change_col])
+            top = df.nlargest(n, change_col)
+            bottom = df.nsmallest(n, change_col)
+            top_sectors = [
+                {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                for _, row in top.iterrows()
+            ]
+            bottom_sectors = [
+                {'name': str(row[name_col]), 'change_pct': float(row[change_col])}
+                for _, row in bottom.iterrows()
+            ]
+            return top_sectors, bottom_sectors
+        except Exception as e:
+            logger.error(f"[Akshare] 新浪接口获取板块排行也失败: {e}")
             return None
 
 

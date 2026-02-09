@@ -210,10 +210,10 @@ OPENAI_MODEL=deepseek-chat
 
 ---
 
-### Q14: Docker 中 WebUI 无法访问？
+### Q14: Docker 中 API 服务无法访问？
 
 **解决方案**：
-1. 确保 `WEBUI_HOST=0.0.0.0`（不能是 127.0.0.1）
+1. 确保启动命令包含 `--host 0.0.0.0`（不能是 127.0.0.1）
 2. 检查端口映射是否正确：
    ```yaml
    ports:
