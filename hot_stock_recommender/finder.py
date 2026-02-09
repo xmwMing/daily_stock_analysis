@@ -642,10 +642,10 @@ class HotStockFinder:
                 logger.debug(f"过滤ST股票: {stock.code} {stock.name}")
                 continue
 
-            # 过滤科创板股票
-            if not self.include_star_stock and self._is_star_stock(stock.code):
+            # 过滤科创板和创业板股票
+            if not self.include_star_stock and self._is_filtered_board_stock(stock.code):
                 filter_stats['star_stock'] += 1
-                logger.debug(f"过滤科创板股票: {stock.code} {stock.name}")
+                logger.debug(f"过滤科创板/创业板股票: {stock.code} {stock.name}")
                 continue
 
             # 过滤价格范围
