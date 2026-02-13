@@ -26,6 +26,10 @@
     {
       "name": "History",
       "description": "历史记录相关接口"
+    },
+    {
+      "name": "SystemConfig",
+      "description": "系统配置管理接口"
     }
   ],
   "paths": {
@@ -369,6 +373,193 @@
           },
           "500": {
             "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/config": {
+      "get": {
+        "tags": [
+          "SystemConfig"
+        ],
+        "summary": "获取系统配置",
+        "description": "读取当前系统配置并返回分类后的字段列表。敏感字段返回真实值，前端自行控制显示/隐藏。",
+        "operationId": "getSystemConfig",
+        "parameters": [
+          {
+            "name": "include_schema",
+            "in": "query",
+            "description": "是否携带字段元数据（默认 true）",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "配置读取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "读取失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "SystemConfig"
+        ],
+        "summary": "更新系统配置",
+        "description": "按键更新系统配置。若字段值为掩码（如 ******），则保留原值不覆盖。",
+        "operationId": "updateSystemConfig",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSystemConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "更新成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateSystemConfigResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemConfigValidationErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "配置版本冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemConfigConflictResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "更新失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/config/validate": {
+      "post": {
+        "tags": [
+          "SystemConfig"
+        ],
+        "summary": "校验配置",
+        "description": "仅校验提交内容，不写入 .env。用于前端保存前预检查。",
+        "operationId": "validateSystemConfig",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateSystemConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "校验完成",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateSystemConfigResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/system/config/schema": {
+      "get": {
+        "tags": [
+          "SystemConfig"
+        ],
+        "summary": "获取配置字段元数据",
+        "description": "返回配置分类、字段类型、校验规则和 UI 控件建议，用于前端动态渲染。",
+        "operationId": "getSystemConfigSchema",
+        "responses": {
+          "200": {
+            "description": "元数据读取成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemConfigSchemaResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "元数据读取失败",
             "content": {
               "application/json": {
                 "schema": {
@@ -933,6 +1124,412 @@
         "required": [
           "stock_code",
           "current_price"
+        ]
+      },
+      "SystemConfigFieldSchema": {
+        "type": "object",
+        "description": "系统配置字段元数据",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "配置键名（ENV 变量）",
+            "example": "GEMINI_API_KEY"
+          },
+          "title": {
+            "type": "string",
+            "description": "前端展示标题",
+            "example": "Gemini API Key"
+          },
+          "description": {
+            "type": "string",
+            "description": "字段说明"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "base",
+              "data_source",
+              "ai_model",
+              "notification",
+              "system",
+              "backtest",
+              "uncategorized"
+            ],
+            "description": "分类"
+          },
+          "data_type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "integer",
+              "number",
+              "boolean",
+              "array",
+              "json",
+              "time"
+            ]
+          },
+          "ui_control": {
+            "type": "string",
+            "enum": [
+              "text",
+              "password",
+              "number",
+              "select",
+              "textarea",
+              "switch",
+              "time"
+            ],
+            "description": "前端控件建议"
+          },
+          "is_sensitive": {
+            "type": "boolean"
+          },
+          "is_required": {
+            "type": "boolean"
+          },
+          "is_editable": {
+            "type": "boolean"
+          },
+          "default_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "可选值列表（用于 select）"
+          },
+          "validation": {
+            "type": "object",
+            "description": "校验规则定义（min/max/regex/enum/custom）"
+          },
+          "display_order": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "category",
+          "data_type",
+          "ui_control",
+          "is_sensitive",
+          "is_required",
+          "is_editable",
+          "display_order"
+        ]
+      },
+      "SystemConfigCategorySchema": {
+        "type": "object",
+        "description": "配置分类元数据",
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_order": {
+            "type": "integer"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemConfigFieldSchema"
+            }
+          }
+        },
+        "required": [
+          "category",
+          "title",
+          "display_order",
+          "fields"
+        ]
+      },
+      "SystemConfigSchemaResponse": {
+        "type": "object",
+        "description": "配置元数据响应",
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "example": "2026-02-09"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemConfigCategorySchema"
+            }
+          }
+        },
+        "required": [
+          "schema_version",
+          "categories"
+        ]
+      },
+      "SystemConfigItem": {
+        "type": "object",
+        "description": "系统配置项（含脱敏显示值）",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "当前配置值（敏感字段返回真实值）"
+          },
+          "raw_value_exists": {
+            "type": "boolean",
+            "description": "敏感字段是否存在真实值（不返回真实值）"
+          },
+          "is_masked": {
+            "type": "boolean"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/SystemConfigFieldSchema"
+          }
+        },
+        "required": [
+          "key",
+          "value",
+          "raw_value_exists",
+          "is_masked"
+        ]
+      },
+      "SystemConfigResponse": {
+        "type": "object",
+        "description": "系统配置读取响应",
+        "properties": {
+          "config_version": {
+            "type": "string",
+            "description": "配置版本（用于乐观锁）",
+            "example": "2026-02-09T13:20:31Z:sha256:4f9a..."
+          },
+          "mask_token": {
+            "type": "string",
+            "example": "******"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemConfigItem"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "config_version",
+          "mask_token",
+          "items"
+        ]
+      },
+      "SystemConfigUpdateItem": {
+        "type": "object",
+        "description": "配置更新项",
+        "properties": {
+          "key": {
+            "type": "string",
+            "example": "STOCK_LIST"
+          },
+          "value": {
+            "type": "string",
+            "description": "字段新值；若敏感字段传入掩码 token 则表示保持原值"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      },
+      "UpdateSystemConfigRequest": {
+        "type": "object",
+        "description": "系统配置更新请求",
+        "properties": {
+          "config_version": {
+            "type": "string"
+          },
+          "mask_token": {
+            "type": "string",
+            "default": "******"
+          },
+          "reload_now": {
+            "type": "boolean",
+            "default": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemConfigUpdateItem"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "config_version",
+          "items"
+        ]
+      },
+      "UpdateSystemConfigResponse": {
+        "type": "object",
+        "description": "系统配置更新结果",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "config_version": {
+            "type": "string"
+          },
+          "applied_count": {
+            "type": "integer"
+          },
+          "skipped_masked_count": {
+            "type": "integer"
+          },
+          "reload_triggered": {
+            "type": "boolean"
+          },
+          "updated_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "success",
+          "config_version",
+          "applied_count",
+          "skipped_masked_count",
+          "reload_triggered",
+          "updated_keys"
+        ]
+      },
+      "ValidateSystemConfigRequest": {
+        "type": "object",
+        "description": "配置校验请求",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SystemConfigUpdateItem"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "ConfigValidationIssue": {
+        "type": "object",
+        "description": "配置校验问题",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "example": "invalid_format"
+          },
+          "message": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "expected": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "code",
+          "message",
+          "severity"
+        ]
+      },
+      "ValidateSystemConfigResponse": {
+        "type": "object",
+        "description": "配置校验结果",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigValidationIssue"
+            }
+          }
+        },
+        "required": [
+          "valid",
+          "issues"
+        ]
+      },
+      "SystemConfigValidationErrorResponse": {
+        "type": "object",
+        "description": "配置更新校验失败响应",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "validation_failed"
+          },
+          "message": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigValidationIssue"
+            }
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "issues"
+        ]
+      },
+      "SystemConfigConflictResponse": {
+        "type": "object",
+        "description": "配置版本冲突响应",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "config_version_conflict"
+          },
+          "message": {
+            "type": "string"
+          },
+          "current_config_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "current_config_version"
         ]
       },
       "ErrorResponse": {

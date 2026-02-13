@@ -57,10 +57,10 @@ $hiddenImports = @(
 )
 $hiddenImportArgs = ($hiddenImports | ForEach-Object { "--hidden-import=$_" }) -join ' '
 
-$cmd = "pyinstaller --name stock_analysis --onefile --noconsole --add-data `"static;static`" $hiddenImportArgs main.py"
+$cmd = "pyinstaller --name stock_analysis --onedir --noconsole --add-data `"static;static`" $hiddenImportArgs main.py"
 Write-Host "Running: $cmd"
 Invoke-Expression $cmd
 
-Copy-Item -Path 'dist\stock_analysis.exe' -Destination 'dist\backend\stock_analysis.exe' -Force
+Copy-Item -Path 'dist\stock_analysis' -Destination 'dist\backend\stock_analysis' -Recurse -Force
 
 Write-Host 'Backend build completed.'

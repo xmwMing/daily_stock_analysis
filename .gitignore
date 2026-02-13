@@ -75,3 +75,5 @@ CLAUDE.md
 
 # ignore static files
 static/
+/apps/dsa-desktop/dist/
+/apps/dsa-desktop/node_modules/

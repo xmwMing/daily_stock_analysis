@@ -30,8 +30,8 @@ x-common: &common
   environment:
     - TZ=Asia/Shanghai
 
-    # API 服务绑定地址（容器内需要绑定到 0.0.0.0）
-    - API_HOST=0.0.0.0
+    # Web/API service bind address (must be 0.0.0.0 inside container)
+    - WEBUI_HOST=0.0.0.0
     # API_PORT 从 .env 文件读取，无需在此硬编码
 
     # 代理设置（如果需要）

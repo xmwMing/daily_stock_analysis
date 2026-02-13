@@ -227,7 +227,7 @@ cp .env.example .env
 vim .env  # Fill in API Keys and configuration
 
 # 3. Start container
-docker-compose -f ./docker/docker-compose.yml up -d webui      # WebUI mode (recommended)
+docker-compose -f ./docker/docker-compose.yml up -d server     # Web service mode (recommended, provides API & WebUI)
 docker-compose -f ./docker/docker-compose.yml up -d analyzer   # Scheduled task mode
 docker-compose -f ./docker/docker-compose.yml up -d            # Start both modes
 
@@ -235,14 +235,14 @@ docker-compose -f ./docker/docker-compose.yml up -d            # Start both mode
 # http://localhost:8000
 
 # 5. View logs
-docker-compose -f ./docker/docker-compose.yml logs -f webui
+docker-compose -f ./docker/docker-compose.yml logs -f server
 ```
 
 ### Run Mode Description
 
 | Command | Description | Port |
 |------|------|------|
-| `docker-compose -f ./docker/docker-compose.yml up -d webui` | WebUI mode, manually trigger analysis | 8000 |
+| `docker-compose -f ./docker/docker-compose.yml up -d server` | Web service mode, provides API & WebUI | 8000 |
 | `docker-compose -f ./docker/docker-compose.yml up -d analyzer` | Scheduled task mode, daily auto execution | - |
 | `docker-compose -f ./docker/docker-compose.yml up -d` | Start both modes simultaneously | 8000 |
 

@@ -20,6 +20,7 @@ import logging
 import json
 import smtplib
 import re
+import time
 import markdown2
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -159,7 +160,9 @@ class NotificationService:
             'password': config.email_password,
             'receivers': config.email_receivers or ([config.email_sender] if config.email_sender else []),
         }
-        
+        # Stock-to-email group routing (Issue #268)
+        self._stock_email_groups = getattr(config, 'stock_email_groups', None) or []
+
         # Pushover 配置
         self._pushover_config = {
             'user_key': getattr(config, 'pushover_user_key', None),
@@ -273,6 +276,43 @@ class NotificationService:
     def _is_email_configured(self) -> bool:
         """检查邮件配置是否完整（只需邮箱和授权码）"""
         return bool(self._email_config['sender'] and self._email_config['password'])
+
+    def get_receivers_for_stocks(self, stock_codes: List[str]) -> List[str]:
+        """
+        Look up email receivers for given stock codes based on stock_email_groups.
+        Returns union of receivers for all matching groups; falls back to default if none match.
+        """
+        if not stock_codes or not self._stock_email_groups:
+            return self._email_config['receivers']
+        seen: set = set()
+        result: List[str] = []
+        for stocks, emails in self._stock_email_groups:
+            for code in stock_codes:
+                if code in stocks:
+                    for e in emails:
+                        if e not in seen:
+                            seen.add(e)
+                            result.append(e)
+                    break
+        return result if result else self._email_config['receivers']
+
+    def get_all_email_receivers(self) -> List[str]:
+        """
+        Return union of all configured email receivers (all groups + default).
+        Used for market review which should go to everyone.
+        """
+        seen: set = set()
+        result: List[str] = []
+        for _, emails in self._stock_email_groups:
+            for e in emails:
+                if e not in seen:
+                    seen.add(e)
+                    result.append(e)
+        for e in self._email_config['receivers']:
+            if e not in seen:
+                seen.add(e)
+                result.append(e)
+        return result
     
     def _is_pushover_configured(self) -> bool:
         """检查 Pushover 配置是否完整"""
@@ -1781,13 +1821,16 @@ class NotificationService:
 
         return _post_payload(text_payload)
 
-    def send_to_email(self, content: str, subject: Optional[str] = None) -> bool:
+    def send_to_email(
+        self, content: str, subject: Optional[str] = None, receivers: Optional[List[str]] = None
+    ) -> bool:
         """
         通过 SMTP 发送邮件（自动识别 SMTP 服务器）
         
         Args:
             content: 邮件内容（支持 Markdown，会转换为 HTML）
             subject: 邮件主题（可选，默认自动生成）
+            receivers: 收件人列表（可选，默认使用配置的 receivers）
             
         Returns:
             是否发送成功
@@ -1798,7 +1841,7 @@ class NotificationService:
         
         sender = self._email_config['sender']
         password = self._email_config['password']
-        receivers = self._email_config['receivers']
+        receivers = receivers or self._email_config['receivers']
         
         try:
             # 生成主题
@@ -2039,9 +2082,8 @@ class NotificationService:
             return False
     
     def _send_telegram_message(self, api_url: str, chat_id: str, text: str, message_thread_id: Optional[str] = None) -> bool:
-        """发送单条 Telegram 消息"""
-        # 转换 Markdown 为 Telegram 支持的格式
-        # Telegram 的 Markdown 格式稍有不同，做简单处理
+        """Send a single Telegram message with exponential backoff retry (Fixes #287)"""
+        # Convert Markdown to Telegram-compatible format
         telegram_text = self._convert_to_telegram_markdown(text)
         
         payload = {
@@ -2053,35 +2095,70 @@ class NotificationService:
 
         if message_thread_id:
             payload['message_thread_id'] = message_thread_id
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = requests.post(api_url, json=payload, timeout=10)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt < max_retries:
+                    delay = 2 ** attempt  # 2s, 4s
+                    logger.warning(f"Telegram request failed (attempt {attempt}/{max_retries}): {e}, "
+                                   f"retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Telegram request failed after {max_retries} attempts: {e}")
+                    return False
         
-        response = requests.post(api_url, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get('ok'):
-                logger.info("Telegram 消息发送成功")
-                return True
-            else:
-                error_desc = result.get('description', '未知错误')
-                logger.error(f"Telegram 返回错误: {error_desc}")
-                
-                # 如果 Markdown 解析失败，尝试纯文本发送
-                if 'parse' in error_desc.lower() or 'markdown' in error_desc.lower():
-                    logger.info("尝试使用纯文本格式重新发送...")
-                    payload['parse_mode'] = None
-                    payload['text'] = text  # 使用原始文本
-                    del payload['parse_mode']
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('ok'):
+                    logger.info("Telegram 消息发送成功")
+                    return True
+                else:
+                    error_desc = result.get('description', '未知错误')
+                    logger.error(f"Telegram 返回错误: {error_desc}")
                     
-                    response = requests.post(api_url, json=payload, timeout=10)
-                    if response.status_code == 200 and response.json().get('ok'):
-                        logger.info("Telegram 消息发送成功（纯文本）")
-                        return True
-                
+                    # If Markdown parsing failed, fall back to plain text
+                    if 'parse' in error_desc.lower() or 'markdown' in error_desc.lower():
+                        logger.info("尝试使用纯文本格式重新发送...")
+                        plain_payload = dict(payload)
+                        plain_payload.pop('parse_mode', None)
+                        plain_payload['text'] = text  # Use original text
+                        
+                        try:
+                            response = requests.post(api_url, json=plain_payload, timeout=10)
+                            if response.status_code == 200 and response.json().get('ok'):
+                                logger.info("Telegram 消息发送成功（纯文本）")
+                                return True
+                        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                            logger.error(f"Telegram plain-text fallback failed: {e}")
+                    
+                    return False
+            elif response.status_code == 429:
+                # Rate limited — respect Retry-After header
+                retry_after = int(response.headers.get('Retry-After', 2 ** attempt))
+                if attempt < max_retries:
+                    logger.warning(f"Telegram rate limited, retrying in {retry_after}s "
+                                   f"(attempt {attempt}/{max_retries})...")
+                    time.sleep(retry_after)
+                    continue
+                else:
+                    logger.error(f"Telegram rate limited after {max_retries} attempts")
+                    return False
+            else:
+                if attempt < max_retries and response.status_code >= 500:
+                    delay = 2 ** attempt
+                    logger.warning(f"Telegram server error HTTP {response.status_code} "
+                                   f"(attempt {attempt}/{max_retries}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                logger.error(f"Telegram 请求失败: HTTP {response.status_code}")
+                logger.error(f"响应内容: {response.text}")
                 return False
-        else:
-            logger.error(f"Telegram 请求失败: HTTP {response.status_code}")
-            logger.error(f"响应内容: {response.text}")
-            return False
+
+        return False
     
     def _send_telegram_chunked(self, api_url: str, chat_id: str, content: str, max_length: int, message_thread_id: Optional[str] = None) -> bool:
         """分段发送长 Telegram 消息"""
@@ -3028,7 +3105,12 @@ class NotificationService:
             logger.error(f"AstrBot 发送异常: {e}")
             return False
     
-    def send(self, content: str) -> bool:
+    def send(
+        self,
+        content: str,
+        email_stock_codes: Optional[List[str]] = None,
+        email_send_to_all: bool = False
+    ) -> bool:
         """
         统一发送接口 - 向所有已配置的渠道发送
         
@@ -3036,6 +3118,8 @@ class NotificationService:
         
         Args:
             content: 消息内容（Markdown 格式）
+            email_stock_codes: 股票代码列表（可选，用于邮件渠道路由到对应分组邮箱，Issue #268）
+            email_send_to_all: 邮件是否发往所有配置邮箱（用于大盘复盘等无股票归属的内容）
             
         Returns:
             是否至少有一个渠道发送成功
@@ -3065,7 +3149,12 @@ class NotificationService:
                 elif channel == NotificationChannel.TELEGRAM:
                     result = self.send_to_telegram(content)
                 elif channel == NotificationChannel.EMAIL:
-                    result = self.send_to_email(content)
+                    receivers = None
+                    if email_send_to_all and self._stock_email_groups:
+                        receivers = self.get_all_email_receivers()
+                    elif email_stock_codes and self._stock_email_groups:
+                        receivers = self.get_receivers_for_stocks(email_stock_codes)
+                    result = self.send_to_email(content, receivers=receivers)
                 elif channel == NotificationChannel.PUSHOVER:
                     result = self.send_to_pushover(content)
                 elif channel == NotificationChannel.PUSHPLUS:

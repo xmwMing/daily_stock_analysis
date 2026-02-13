@@ -99,7 +99,8 @@ def _is_etf_code(stock_code: str) -> bool:
         True 表示是 ETF 代码，False 表示是普通股票代码
     """
     etf_prefixes = ('51', '52', '56', '58', '15', '16', '18')
-    return stock_code.startswith(etf_prefixes) and len(stock_code) == 6
+    code = stock_code.strip().split('.')[0]
+    return code.startswith(etf_prefixes) and len(code) == 6
 
 
 def _is_hk_code(stock_code: str) -> bool:

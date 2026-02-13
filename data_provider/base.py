@@ -38,6 +38,42 @@ logger = logging.getLogger(__name__)
 STANDARD_COLUMNS = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'pct_chg']
 
 
+def normalize_stock_code(stock_code: str) -> str:
+    """
+    Normalize stock code by stripping exchange prefixes/suffixes.
+
+    Accepted formats and their normalized results:
+    - '600519'      -> '600519'   (already clean)
+    - 'SH600519'    -> '600519'   (strip SH prefix)
+    - 'SZ000001'    -> '000001'   (strip SZ prefix)
+    - 'sh600519'    -> '600519'   (case-insensitive)
+    - '600519.SH'   -> '600519'   (strip .SH suffix)
+    - '000001.SZ'   -> '000001'   (strip .SZ suffix)
+    - 'HK00700'     -> 'HK00700'  (keep HK prefix for HK stocks)
+    - 'AAPL'        -> 'AAPL'     (keep US stock ticker as-is)
+
+    This function is applied at the DataProviderManager layer so that
+    all individual fetchers receive a clean 6-digit code (for A-shares/ETFs).
+    """
+    code = stock_code.strip()
+    upper = code.upper()
+
+    # Strip SH/SZ prefix (e.g. SH600519 -> 600519)
+    if upper.startswith(('SH', 'SZ')) and not upper.startswith('SH.') and not upper.startswith('SZ.'):
+        candidate = code[2:]
+        # Only strip if the remainder looks like a valid numeric code
+        if candidate.isdigit() and len(candidate) in (5, 6):
+            return candidate
+
+    # Strip .SH/.SZ suffix (e.g. 600519.SH -> 600519)
+    if '.' in code:
+        base, suffix = code.rsplit('.', 1)
+        if suffix.upper() in ('SH', 'SZ', 'SS') and base.isdigit():
+            return base
+
+    return code
+
+
 class DataFetchError(Exception):
     """数据获取异常基类"""
     pass
@@ -388,6 +424,9 @@ class DataFetcherManager:
         Raises:
             DataFetchError: 所有数据源都失败时抛出
         """
+        # Normalize code (strip SH/SZ prefix etc.)
+        stock_code = normalize_stock_code(stock_code)
+
         errors = []
         
         for fetcher in self._fetchers:
@@ -440,6 +479,9 @@ class DataFetcherManager:
         Returns:
             预取的股票数量（0 表示跳过预取）
         """
+        # Normalize all codes
+        stock_codes = [normalize_stock_code(c) for c in stock_codes]
+
         from src.config import get_config
         
         config = get_config()
@@ -512,6 +554,9 @@ class DataFetcherManager:
         Returns:
             UnifiedRealtimeQuote 对象，所有数据源都失败则返回 None
         """
+        # Normalize code (strip SH/SZ prefix etc.)
+        stock_code = normalize_stock_code(stock_code)
+
         from .realtime_types import get_realtime_circuit_breaker
         from .akshare_fetcher import _is_us_code
         from src.config import get_config
@@ -682,6 +727,9 @@ class DataFetcherManager:
         Returns:
             ChipDistribution 对象，失败则返回 None
         """
+        # Normalize code (strip SH/SZ prefix etc.)
+        stock_code = normalize_stock_code(stock_code)
+
         from .realtime_types import get_chip_circuit_breaker
         from src.config import get_config
 
@@ -740,6 +788,9 @@ class DataFetcherManager:
         Returns:
             股票中文名称，所有数据源都失败则返回 None
         """
+        # Normalize code (strip SH/SZ prefix etc.)
+        stock_code = normalize_stock_code(stock_code)
+
         # 1. 先检查缓存
         if hasattr(self, '_stock_name_cache') and stock_code in self._stock_name_cache:
             return self._stock_name_cache[stock_code]
