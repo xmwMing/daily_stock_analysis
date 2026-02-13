@@ -718,7 +718,7 @@ class HotStockFinder:
         科创板股票特征：
         - 股票代码以 688 开头
         创业板股票特征：
-        - 股票代码以 300 开头
+        - 股票代码以 300 或 301 开头
 
         Args:
             code: 股票代码
@@ -732,8 +732,8 @@ class HotStockFinder:
         # 清理股票代码，移除前缀
         clean_code = code.replace('SH', '').replace('SZ', '')
 
-        # 检查是否以 688 (科创板) 或 300 (创业板) 开头
-        return clean_code.startswith('688') or clean_code.startswith('300')
+        # 检查是否以 688 (科创板) 或 300/301 (创业板) 开头
+        return clean_code.startswith('688') or clean_code.startswith('300') or clean_code.startswith('301')
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """
