@@ -76,6 +76,13 @@ class KLineData(BaseModel):
         }
 
 
+class ExtractFromImageResponse(BaseModel):
+    """图片股票代码提取响应"""
+
+    codes: List[str] = Field(..., description="提取的股票代码（已去重）")
+    raw_text: Optional[str] = Field(None, description="原始 LLM 响应（调试用）")
+
+
 class StockHistoryResponse(BaseModel):
     """股票历史行情响应"""
     

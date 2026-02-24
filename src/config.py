@@ -70,10 +70,17 @@ class Config:
     gemini_max_retries: int = 5  # 最大重试次数
     gemini_retry_delay: float = 5.0  # 重试基础延时（秒）
 
-    # OpenAI 兼容 API（备选，当 Gemini 不可用时使用）
+    # Anthropic Claude API（备选，当 Gemini 不可用时使用）
+    anthropic_api_key: Optional[str] = None
+    anthropic_model: str = "claude-3-5-sonnet-20241022"  # Claude model name
+    anthropic_temperature: float = 0.7  # Anthropic temperature (0.0-1.0, default 0.7)
+    anthropic_max_tokens: int = 8192  # Max tokens for Anthropic responses
+
+    # OpenAI 兼容 API（备选，当 Gemini/Anthropic 不可用时使用）
     openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None  # 如: https://api.openai.com/v1
     openai_model: str = "gpt-4o-mini"  # OpenAI 兼容模型名称
+    openai_vision_model: Optional[str] = None  # Vision 专用模型（可选，不配置则用 openai_model；部分模型如 DeepSeek 不支持图像）
     openai_temperature: float = 0.7  # OpenAI 温度参数（0.0-2.0，默认0.7）
 
     # === 搜索引擎配置（支持多 Key 负载均衡）===
@@ -81,6 +88,16 @@ class Config:
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
     brave_api_keys: List[str] = field(default_factory=list)  # Brave Search API Keys
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
+
+    # === 新闻与分析筛选配置 ===
+    news_max_age_days: int = 3   # 新闻最大时效（天）
+    bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
+
+    # === Agent 模式配置 ===
+    agent_mode: bool = False
+    agent_max_steps: int = 10
+    agent_skills: List[str] = field(default_factory=list)
+    agent_strategy_dir: Optional[str] = None
 
     # === 通知配置（可同时配置多个，全部推送）===
 
@@ -113,6 +130,7 @@ class Config:
     # 适用于：钉钉、Discord、Slack、自建服务等任意支持 POST JSON 的 Webhook
     custom_webhook_urls: List[str] = field(default_factory=list)
     custom_webhook_bearer_token: Optional[str] = None  # Bearer Token（用于需要认证的 Webhook）
+    webhook_verify_ssl: bool = True  # Webhook HTTPS 证书校验，false 可支持自签名（有 MITM 风险）
 
     # Discord 通知配置
     discord_bot_token: Optional[str] = None  # Discord Bot Token
@@ -129,6 +147,9 @@ class Config:
     # 报告类型：simple(精简) 或 full(完整)
     report_type: str = "simple"
 
+    # 仅分析结果摘要：true 时只推送汇总，不含个股详情（Issue #262）
+    report_summary_only: bool = False
+
     # PushPlus 推送配置
     pushplus_token: Optional[str] = None  # PushPlus Token
 
@@ -138,10 +159,17 @@ class Config:
     # 分析间隔时间（秒）- 用于避免API限流
     analysis_delay: float = 0.0  # 个股分析与大盘分析之间的延迟
 
+    # Merge stock + market report into one notification (Issue #190)
+    merge_email_notification: bool = False
+
     # 消息长度限制（字节）- 超长自动分批发送
     feishu_max_bytes: int = 20000  # 飞书限制约 20KB，默认 20000 字节
     wechat_max_bytes: int = 4000   # 企业微信限制 4096 字节，默认 4000 字节
     wechat_msg_type: str = "markdown"  # 企业微信消息类型，默认 markdown 类型
+
+    # Markdown 转图片（Issue #289）：对不支持 Markdown 的渠道以图片发送
+    markdown_to_image_channels: List[str] = field(default_factory=list)  # 逗号分隔：telegram,wechat,custom,email
+    markdown_to_image_max_chars: int = 15000  # 超过此长度不转换，避免超大图片
 
     # === 数据库配置 ===
     database_path: str = "./data/stock_analysis.db"
@@ -169,14 +197,20 @@ class Config:
     # === 定时任务配置 ===
     schedule_enabled: bool = False            # 是否启用定时任务
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
+    schedule_run_immediately: bool = True     # 启动时是否立即执行一次
+    run_immediately: bool = True              # 启动时是否立即执行一次（非定时模式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
     hot_stocks_enabled: bool = True           # 是否启用热门股票推荐功能
+    # 大盘复盘市场区域：cn(A股)、us(美股)、both(两者)，us 适合仅关注美股的用户
+    market_review_region: str = "cn"
 
     # === 实时行情增强数据配置 ===
     # 实时行情开关（关闭后使用历史收盘价进行分析）
     enable_realtime_quote: bool = True
     # 筹码分布开关（该接口不稳定，云端部署建议关闭）
     enable_chip_distribution: bool = True
+    # 东财接口补丁开关
+    enable_eastmoney_patch: bool = False
     # 实时行情数据源优先级（逗号分隔）
     # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
     # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
@@ -311,12 +345,12 @@ class Config:
                 os.environ['https_proxy'] = https_proxy
 
 
-        # 解析自选股列表（逗号分隔）
+        # 解析自选股列表（逗号分隔，统一为大写 Issue #355）
         stock_list_str = os.getenv('STOCK_LIST', '')
         stock_list = [
-            code.strip()
-            for code in stock_list_str.split(',')
-            if code.strip()
+            (c or "").strip().upper()
+            for c in stock_list_str.split(',')
+            if (c or "").strip()
         ]
 
         # 如果没有配置，使用默认的示例股票
@@ -359,14 +393,33 @@ class Config:
             gemini_request_delay=float(os.getenv('GEMINI_REQUEST_DELAY', '2.0')),
             gemini_max_retries=int(os.getenv('GEMINI_MAX_RETRIES', '5')),
             gemini_retry_delay=float(os.getenv('GEMINI_RETRY_DELAY', '5.0')),
-            openai_api_key=os.getenv('OPENAI_API_KEY'),
-            openai_base_url=os.getenv('OPENAI_BASE_URL'),
+            anthropic_api_key=os.getenv('ANTHROPIC_API_KEY'),
+            anthropic_model=os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022'),
+            anthropic_temperature=float(os.getenv('ANTHROPIC_TEMPERATURE', '0.7')),
+            anthropic_max_tokens=int(os.getenv('ANTHROPIC_MAX_TOKENS', '8192')),
+            # AIHubmix is the preferred OpenAI-compatible provider (one key, all models, no VPN required).
+            # Within the OpenAI-compatible layer: AIHUBMIX_KEY takes priority over OPENAI_API_KEY.
+            # Overall provider fallback order: Gemini > Anthropic > OpenAI-compatible (incl. AIHubmix).
+            # base_url is auto-set to aihubmix.com/v1 when AIHUBMIX_KEY is used and no explicit
+            # OPENAI_BASE_URL override is provided.
+            # Model names match upstream (e.g. gemini-3.1-pro-preview, gpt-4o, gpt-4o-free, deepseek-chat).
+            openai_api_key=os.getenv('AIHUBMIX_KEY') or os.getenv('OPENAI_API_KEY') or None,
+            openai_base_url=os.getenv('OPENAI_BASE_URL') or (
+                'https://aihubmix.com/v1' if os.getenv('AIHUBMIX_KEY') else None
+            ),  # noqa: E501
             openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+            openai_vision_model=os.getenv('OPENAI_VISION_MODEL') or None,
             openai_temperature=float(os.getenv('OPENAI_TEMPERATURE', '0.7')),
             bocha_api_keys=bocha_api_keys,
             tavily_api_keys=tavily_api_keys,
             brave_api_keys=brave_api_keys,
             serpapi_keys=serpapi_keys,
+            news_max_age_days=max(1, int(os.getenv('NEWS_MAX_AGE_DAYS', '3'))),
+            bias_threshold=max(1.0, float(os.getenv('BIAS_THRESHOLD', '5.0'))),
+            agent_mode=os.getenv('AGENT_MODE', 'false').lower() == 'true',
+            agent_max_steps=int(os.getenv('AGENT_MAX_STEPS', '10')),
+            agent_skills=[s.strip() for s in os.getenv('AGENT_SKILLS', '').split(',') if s.strip()],
+            agent_strategy_dir=os.getenv('AGENT_STRATEGY_DIR'),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             telegram_bot_token=os.getenv('TELEGRAM_BOT_TOKEN'),
@@ -383,6 +436,7 @@ class Config:
             serverchan3_sendkey=os.getenv('SERVERCHAN3_SENDKEY'),
             custom_webhook_urls=[u.strip() for u in os.getenv('CUSTOM_WEBHOOK_URLS', '').split(',') if u.strip()],
             custom_webhook_bearer_token=os.getenv('CUSTOM_WEBHOOK_BEARER_TOKEN'),
+            webhook_verify_ssl=os.getenv('WEBHOOK_VERIFY_SSL', 'true').lower() == 'true',
             discord_bot_token=os.getenv('DISCORD_BOT_TOKEN'),
             discord_main_channel_id=os.getenv('DISCORD_MAIN_CHANNEL_ID'),
             discord_webhook_url=os.getenv('DISCORD_WEBHOOK_URL'),
@@ -390,10 +444,18 @@ class Config:
             astrbot_token=os.getenv('ASTRBOT_TOKEN'),
             single_stock_notify=os.getenv('SINGLE_STOCK_NOTIFY', 'false').lower() == 'true',
             report_type=os.getenv('REPORT_TYPE', 'simple').lower(),
+            report_summary_only=os.getenv('REPORT_SUMMARY_ONLY', 'false').lower() == 'true',
             analysis_delay=float(os.getenv('ANALYSIS_DELAY', '0')),
+            merge_email_notification=os.getenv('MERGE_EMAIL_NOTIFICATION', 'false').lower() == 'true',
             feishu_max_bytes=int(os.getenv('FEISHU_MAX_BYTES', '20000')),
             wechat_max_bytes=wechat_max_bytes,
             wechat_msg_type=wechat_msg_type_lower,
+            markdown_to_image_channels=[
+                c.strip().lower()
+                for c in os.getenv('MARKDOWN_TO_IMAGE_CHANNELS', '').split(',')
+                if c.strip()
+            ],
+            markdown_to_image_max_chars=int(os.getenv('MARKDOWN_TO_IMAGE_MAX_CHARS', '15000')),
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
             save_context_snapshot=os.getenv('SAVE_CONTEXT_SNAPSHOT', 'true').lower() == 'true',
             backtest_enabled=os.getenv('BACKTEST_ENABLED', 'true').lower() == 'true',
@@ -409,8 +471,13 @@ class Config:
             https_proxy=os.getenv('HTTPS_PROXY'),
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
+            schedule_run_immediately=os.getenv('SCHEDULE_RUN_IMMEDIATELY', 'true').lower() == 'true',
+            run_immediately=os.getenv('RUN_IMMEDIATELY', 'true').lower() == 'true',
             market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
             hot_stocks_enabled=os.getenv('HOT_STOCKS_ENABLED', 'true').lower() == 'true',
+            market_review_region=cls._parse_market_review_region(
+                os.getenv('MARKET_REVIEW_REGION', 'cn')
+            ),
             webui_enabled=os.getenv('WEBUI_ENABLED', 'false').lower() == 'true',
             webui_host=os.getenv('WEBUI_HOST', '127.0.0.1'),
             webui_port=int(os.getenv('WEBUI_PORT', '8000')),
@@ -440,6 +507,8 @@ class Config:
             # 实时行情增强数据配置
             enable_realtime_quote=os.getenv('ENABLE_REALTIME_QUOTE', 'true').lower() == 'true',
             enable_chip_distribution=os.getenv('ENABLE_CHIP_DISTRIBUTION', 'true').lower() == 'true',
+            # 东财接口补丁开关
+            enable_eastmoney_patch=os.getenv('ENABLE_EASTMONEY_PATCH', 'false').lower() == 'true',
             # 实时行情数据源优先级：
             # - tencent: 腾讯财经，有量比/换手率/PE/PB等，单股查询稳定（推荐）
             # - akshare_sina: 新浪财经，基本行情稳定，但无量比
@@ -476,6 +545,18 @@ class Config:
             if 'stocks' in g and 'emails' in g and g['stocks'] and g['emails']:
                 result.append((g['stocks'], g['emails']))
         return result
+
+    @classmethod
+    def _parse_market_review_region(cls, value: str) -> str:
+        """解析大盘复盘市场区域，非法值记录警告后回退为 cn"""
+        import logging
+        v = (value or 'cn').strip().lower()
+        if v in ('cn', 'us', 'both'):
+            return v
+        logging.getLogger(__name__).warning(
+            f"MARKET_REVIEW_REGION 配置值 '{value}' 无效，已回退为默认值 'cn'（合法值：cn / us / both）"
+        )
+        return 'cn'
 
     @classmethod
     def _resolve_realtime_source_priority(cls) -> str:
@@ -535,9 +616,9 @@ class Config:
             stock_list_str = os.getenv('STOCK_LIST', '')
 
         stock_list = [
-            code.strip()
-            for code in stock_list_str.split(',')
-            if code.strip()
+            (c or "").strip().upper()
+            for c in stock_list_str.split(',')
+            if (c or "").strip()
         ]
 
         if not stock_list:
@@ -560,10 +641,10 @@ class Config:
         if not self.tushare_token:
             warnings.append("提示：未配置 Tushare Token，将使用其他数据源")
 
-        if not self.gemini_api_key and not self.openai_api_key:
-            warnings.append("警告：未配置 Gemini 或 OpenAI API Key，AI 分析功能将不可用")
-        elif not self.gemini_api_key:
-            warnings.append("提示：未配置 Gemini API Key，将使用 OpenAI 兼容 API")
+        if not self.gemini_api_key and not self.anthropic_api_key and not self.openai_api_key:
+            warnings.append("警告：未配置 Gemini/Anthropic/OpenAI API Key，AI 分析功能将不可用")
+        elif not self.gemini_api_key and not self.anthropic_api_key:
+            warnings.append("提示：未配置 Gemini/Anthropic API Key，将使用 OpenAI 兼容 API")
 
         if not self.bocha_api_keys and not self.tavily_api_keys and not self.brave_api_keys and not self.serpapi_keys:
             warnings.append("提示：未配置搜索引擎 API Key (Bocha/Tavily/Brave/SerpAPI)，新闻搜索功能将不可用")
@@ -577,7 +658,7 @@ class Config:
             (self.pushover_user_key and self.pushover_api_token) or
             self.pushplus_token or
             self.serverchan3_sendkey or
-            (self.custom_webhook_urls and self.custom_webhook_bearer_token) or
+            self.custom_webhook_urls or
             (self.discord_bot_token and self.discord_main_channel_id) or
             self.discord_webhook_url
         )

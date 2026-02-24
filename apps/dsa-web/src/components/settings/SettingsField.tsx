@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type React from 'react';
-import { Select } from '../common';
+import { EyeToggleIcon, Select } from '../common';
 import type { ConfigValidationIssue, SystemConfigItem } from '../../types/systemConfig';
 import { getFieldDescriptionZh, getFieldTitleZh } from '../../utils/systemConfigI18n';
 
@@ -102,6 +102,16 @@ function renderFieldControl(
               />
               <button
                 type="button"
+                className="btn-secondary !p-2"
+                disabled={disabled || !schema?.isEditable}
+                onClick={onToggleSecretVisible}
+                title={isSecretVisible ? '隐藏' : '显示'}
+                aria-label={isSecretVisible ? '隐藏密码' : '显示密码'}
+              >
+                <EyeToggleIcon visible={isSecretVisible} />
+              </button>
+              <button
+                type="button"
                 className="btn-secondary !px-3 !py-2 text-xs"
                 disabled={disabled || !schema?.isEditable || values.length <= 1}
                 onClick={() => {
@@ -123,14 +133,6 @@ function renderFieldControl(
             >
               添加 Key
             </button>
-            <button
-              type="button"
-              className="btn-secondary !px-3 !py-2 text-xs"
-              disabled={disabled || !schema?.isEditable}
-              onClick={onToggleSecretVisible}
-            >
-              {isSecretVisible ? '隐藏' : '显示'}
-            </button>
           </div>
         </div>
       );
@@ -147,11 +149,13 @@ function renderFieldControl(
         />
         <button
           type="button"
-          className="btn-secondary !px-3 !py-2 text-xs"
+          className="btn-secondary !p-2"
           disabled={disabled || !schema?.isEditable}
           onClick={onToggleSecretVisible}
+          title={isSecretVisible ? '隐藏' : '显示'}
+          aria-label={isSecretVisible ? '隐藏密码' : '显示密码'}
         >
-          {isSecretVisible ? '隐藏' : '显示'}
+          <EyeToggleIcon visible={isSecretVisible} />
         </button>
       </div>
     );
@@ -214,7 +218,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
 
       {schema?.isSensitive ? (
         <p className="mt-2 text-[11px] text-secondary">
-          密钥默认隐藏，可点击“显示”查看明文。
+          密钥默认隐藏，可点击眼睛图标查看明文。
           {isMultiValue ? ' 支持添加多个输入框进行增删。' : ''}
         </p>
       ) : null}

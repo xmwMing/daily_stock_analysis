@@ -40,12 +40,15 @@ from tenacity import (
     before_sleep_log,
 )
 
+from patch.eastmoney_patch import eastmoney_patch
+from src.config import get_config
 from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS
 from .realtime_types import (
     UnifiedRealtimeQuote, ChipDistribution, RealtimeSource,
     get_realtime_circuit_breaker, get_chip_circuit_breaker,
     safe_float, safe_int  # 使用统一的类型转换函数
 )
+from .us_index_mapping import is_us_index_code, is_us_stock_code
 
 
 # 保留旧的 RealtimeQuote 别名，用于向后兼容
@@ -129,11 +132,9 @@ def _is_hk_code(stock_code: str) -> bool:
 
 def _is_us_code(stock_code: str) -> bool:
     """
-    判断代码是否为美股
+    判断代码是否为美股股票（不包括美股指数）。
 
-    美股代码规则：
-    - 1-5个大写字母，如 'AAPL' (苹果), 'TSLA' (特斯拉)
-    - 可能包含 '.' 用于特殊股票类别，如 'BRK.B' (伯克希尔B类股)
+    委托给 us_index_mapping 模块的 is_us_stock_code()。
 
     Args:
         stock_code: 股票代码
@@ -146,17 +147,12 @@ def _is_us_code(stock_code: str) -> bool:
         True
         >>> _is_us_code('TSLA')
         True
-        >>> _is_us_code('BRK.B')
-        True
+        >>> _is_us_code('SPX')
+        False
         >>> _is_us_code('600519')
         False
-        >>> _is_us_code('hk00700')
-        False
     """
-    import re
-    code = stock_code.strip().upper()
-    # 美股：1-5个大写字母，可能包含一个点和字母（如 BRK.B）
-    return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code))
+    return is_us_stock_code(stock_code)
 
 
 class AkshareFetcher(BaseFetcher):
@@ -186,6 +182,9 @@ class AkshareFetcher(BaseFetcher):
         self.sleep_min = sleep_min
         self.sleep_max = sleep_max
         self._last_request_time: Optional[float] = None
+        # 东财补丁开启才执行打补丁操作
+        if get_config().enable_eastmoney_patch:
+            eastmoney_patch()
 
     def _set_random_user_agent(self) -> None:
         """
@@ -235,7 +234,7 @@ class AkshareFetcher(BaseFetcher):
         从 Akshare 获取原始数据
 
         根据代码类型自动选择 API：
-        - 美股：使用 ak.stock_us_daily()
+        - 美股：不支持，抛出异常由 YfinanceFetcher 处理（Issue #311）
         - 港股：使用 ak.stock_hk_hist()
         - ETF 基金：使用 ak.fund_etf_hist_em()
         - 普通 A 股：使用 ak.stock_zh_a_hist()
@@ -249,7 +248,11 @@ class AkshareFetcher(BaseFetcher):
         """
         # 根据代码类型选择不同的获取方法
         if _is_us_code(stock_code):
-            return self._fetch_us_data(stock_code, start_date, end_date)
+            # 美股：akshare 的 stock_us_daily 接口复权存在已知问题（参见 Issue #311）
+            # 交由 YfinanceFetcher 处理，确保复权价格一致
+            raise DataFetchError(
+                f"AkshareFetcher 不支持美股 {stock_code}，请使用 YfinanceFetcher 获取正确的复权价格"
+            )
         elif _is_hk_code(stock_code):
             return self._fetch_hk_data(stock_code, start_date, end_date)
         elif _is_etf_code(stock_code):
@@ -1302,10 +1305,12 @@ class AkshareFetcher(BaseFetcher):
 
         return result
 
-    def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
+    def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """
-        获取主要指数实时行情 (新浪接口)
+        获取主要指数实时行情 (新浪接口)，仅支持 A 股
         """
+        if region != "cn":
+            return None
         import akshare as ak
 
         # 主要指数代码映射

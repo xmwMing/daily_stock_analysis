@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 存储层
 """
 
 import atexit
+from contextlib import contextmanager
 import hashlib
 import json
 import logging
@@ -363,6 +364,19 @@ class BacktestSummary(Base):
     )
 
 
+class ConversationMessage(Base):
+    """
+    Agent 对话历史记录表
+    """
+    __tablename__ = 'conversation_messages'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(100), index=True, nullable=False)
+    role = Column(String(20), nullable=False)  # user, assistant, system
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -473,6 +487,19 @@ class DatabaseManager:
         except Exception:
             session.close()
             raise
+
+    @contextmanager
+    def session_scope(self):
+        """Provide a transactional scope around a series of operations."""
+        session = self.get_session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
     
     def has_today_data(self, code: str, target_date: Optional[date] = None) -> bool:
         """
@@ -552,6 +579,8 @@ class DatabaseManager:
             return 0
 
         saved_count = 0
+        query_ctx = query_context or {}
+        current_query_id = (query_ctx.get("query_id") or "").strip()
 
         with self.get_session() as session:
             try:
@@ -588,14 +617,30 @@ class DatabaseManager:
                         existing.fetched_at = datetime.now()
 
                         if query_context:
-                            existing.query_id = query_context.get("query_id") or existing.query_id
-                            existing.query_source = query_context.get("query_source") or existing.query_source
-                            existing.requester_platform = query_context.get("requester_platform") or existing.requester_platform
-                            existing.requester_user_id = query_context.get("requester_user_id") or existing.requester_user_id
-                            existing.requester_user_name = query_context.get("requester_user_name") or existing.requester_user_name
-                            existing.requester_chat_id = query_context.get("requester_chat_id") or existing.requester_chat_id
-                            existing.requester_message_id = query_context.get("requester_message_id") or existing.requester_message_id
-                            existing.requester_query = query_context.get("requester_query") or existing.requester_query
+                            # Keep the first query_id to avoid overwriting historical links.
+                            if not existing.query_id and current_query_id:
+                                existing.query_id = current_query_id
+                            existing.query_source = (
+                                query_context.get("query_source") or existing.query_source
+                            )
+                            existing.requester_platform = (
+                                query_context.get("requester_platform") or existing.requester_platform
+                            )
+                            existing.requester_user_id = (
+                                query_context.get("requester_user_id") or existing.requester_user_id
+                            )
+                            existing.requester_user_name = (
+                                query_context.get("requester_user_name") or existing.requester_user_name
+                            )
+                            existing.requester_chat_id = (
+                                query_context.get("requester_chat_id") or existing.requester_chat_id
+                            )
+                            existing.requester_message_id = (
+                                query_context.get("requester_message_id") or existing.requester_message_id
+                            )
+                            existing.requester_query = (
+                                query_context.get("requester_query") or existing.requester_query
+                            )
                     else:
                         try:
                             with session.begin_nested():
@@ -611,14 +656,14 @@ class DatabaseManager:
                                     source=source,
                                     published_date=published_date,
                                     fetched_at=datetime.now(),
-                                    query_id=(query_context or {}).get("query_id"),
-                                    query_source=(query_context or {}).get("query_source"),
-                                    requester_platform=(query_context or {}).get("requester_platform"),
-                                    requester_user_id=(query_context or {}).get("requester_user_id"),
-                                    requester_user_name=(query_context or {}).get("requester_user_name"),
-                                    requester_chat_id=(query_context or {}).get("requester_chat_id"),
-                                    requester_message_id=(query_context or {}).get("requester_message_id"),
-                                    requester_query=(query_context or {}).get("requester_query"),
+                                    query_id=current_query_id or None,
+                                    query_source=query_ctx.get("query_source"),
+                                    requester_platform=query_ctx.get("requester_platform"),
+                                    requester_user_id=query_ctx.get("requester_user_id"),
+                                    requester_user_name=query_ctx.get("requester_user_name"),
+                                    requester_chat_id=query_ctx.get("requester_chat_id"),
+                                    requester_message_id=query_ctx.get("requester_message_id"),
+                                    requester_query=query_ctx.get("requester_query"),
                                 )
                                 session.add(record)
                                 session.flush()
@@ -742,16 +787,24 @@ class DatabaseManager:
         limit: int = 50
     ) -> List[AnalysisHistory]:
         """
-        查询分析历史记录
+        Query analysis history records.
+
+        Notes:
+        - If query_id is provided, perform exact lookup and ignore days window.
+        - If query_id is not provided, apply days-based time filtering.
         """
         cutoff_date = datetime.now() - timedelta(days=days)
 
         with self.get_session() as session:
-            conditions = [AnalysisHistory.created_at >= cutoff_date]
-            if code:
-                conditions.append(AnalysisHistory.code == code)
+            conditions = []
+
             if query_id:
                 conditions.append(AnalysisHistory.query_id == query_id)
+            else:
+                conditions.append(AnalysisHistory.created_at >= cutoff_date)
+
+            if code:
+                conditions.append(AnalysisHistory.code == code)
 
             results = session.execute(
                 select(AnalysisHistory)
@@ -1156,6 +1209,31 @@ class DatabaseManager:
         raw_key = f"{code}|{title}|{source}|{date_str}"
         digest = hashlib.md5(raw_key.encode("utf-8")).hexdigest()
         return f"no-url:{code}:{digest}"
+
+    def save_conversation_message(self, session_id: str, role: str, content: str) -> None:
+        """
+        保存 Agent 对话消息
+        """
+        with self.session_scope() as session:
+            msg = ConversationMessage(
+                session_id=session_id,
+                role=role,
+                content=content
+            )
+            session.add(msg)
+
+    def get_conversation_history(self, session_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        获取 Agent 对话历史
+        """
+        with self.session_scope() as session:
+            stmt = select(ConversationMessage).filter(
+                ConversationMessage.session_id == session_id
+            ).order_by(ConversationMessage.created_at.desc()).limit(limit)
+            messages = session.execute(stmt).scalars().all()
+            
+            # 倒序返回，保证时间顺序
+            return [{"role": msg.role, "content": msg.content} for msg in reversed(messages)]
 
 
 # 便捷函数

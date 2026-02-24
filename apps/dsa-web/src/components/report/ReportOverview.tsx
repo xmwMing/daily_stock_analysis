@@ -33,8 +33,8 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* 主信息区 - 两列布局 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {/* 主信息区 - 两列布局，items-stretch 确保右侧与左侧同高 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
         {/* 左侧：股票信息与结论 */}
         <div className="lg:col-span-2 space-y-4">
           {/* 股票头部 */}
@@ -118,10 +118,10 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
           </div>
         </div>
 
-        {/* 右侧：情绪指标 */}
-        <div className="space-y-4">
-          <Card variant="bordered" padding="md" className="!overflow-visible">
-            <div className="text-center">
+        {/* 右侧：情绪指标 - 填满格子高度，消除与 STRATEGY POINTS 之间的空隙 */}
+        <div className="flex flex-col self-stretch min-h-full">
+          <Card variant="bordered" padding="md" className="!overflow-visible flex-1 flex flex-col min-h-0">
+            <div className="text-center flex-1 flex flex-col justify-center">
               <h3 className="text-sm font-medium text-white mb-4">Market Sentiment</h3>
               <ScoreGauge score={summary.sentimentScore} size="lg" />
             </div>

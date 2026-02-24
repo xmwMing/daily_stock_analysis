@@ -43,6 +43,7 @@ from api.v1.schemas.history import (
     ReportStrategy,
     ReportDetails,
 )
+from data_provider.base import canonical_stock_code
 from src.config import Config
 from src.services.task_queue import (
     get_task_queue,
@@ -115,7 +116,8 @@ def trigger_analysis(
             }
         )
 
-    # 去重
+    # 统一大小写后去重，确保 ['aapl', 'AAPL'] 被识别为同一股票（Issue #355）
+    stock_codes = [canonical_stock_code(c) for c in stock_codes]
     stock_codes = list(dict.fromkeys(stock_codes))
     stock_code = stock_codes[0]  # 当前只处理第一个
 

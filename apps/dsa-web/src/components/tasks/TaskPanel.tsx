@@ -120,7 +120,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({
   const processingCount = activeTasks.filter((t) => t.status === 'processing').length;
 
   return (
-    <div className={`bg-surface rounded-xl border border-white/5 overflow-hidden ${className}`}>
+    <div className={`bg-card rounded-xl border border-white/5 overflow-hidden ${className}`}>
       {/* 标题栏 */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
         <div className="flex items-center gap-2">

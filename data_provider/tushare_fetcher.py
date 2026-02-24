@@ -617,10 +617,12 @@ class TushareFetcher(BaseFetcher):
             logger.warning(f"Tushare (旧版) 获取实时行情失败 {stock_code}: {e}")
             return None
 
-    def get_main_indices(self) -> Optional[List[dict]]:
+    def get_main_indices(self, region: str = "cn") -> Optional[List[dict]]:
         """
-        获取主要指数实时行情 (Tushare Pro)
+        获取主要指数实时行情 (Tushare Pro)，仅支持 A 股
         """
+        if region != "cn":
+            return None
         if self._api is None:
             return None
 

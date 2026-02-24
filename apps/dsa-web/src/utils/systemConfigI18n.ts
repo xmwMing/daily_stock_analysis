@@ -6,8 +6,9 @@ const categoryTitleMap: Record<SystemConfigCategory, string> = {
   ai_model: 'AI 模型',
   notification: '通知渠道',
   system: '系统设置',
+  agent: 'Agent 设置',
   backtest: '回测配置',
-  uncategorized: '未分类',
+  uncategorized: '其他',
 };
 
 const categoryDescriptionMap: Partial<Record<SystemConfigCategory, string>> = {
@@ -16,8 +17,9 @@ const categoryDescriptionMap: Partial<Record<SystemConfigCategory, string>> = {
   ai_model: '管理模型供应商、模型名称与推理参数。',
   notification: '管理机器人、Webhook 和消息推送配置。',
   system: '管理调度、日志、端口等系统级参数。',
+  agent: '管理 Agent 模式、技能与策略配置。',
   backtest: '管理回测开关、评估窗口和引擎参数。',
-  uncategorized: '暂未归类的配置项。',
+  uncategorized: '其他未归类的配置项。',
 };
 
 const fieldTitleMap: Record<string, string> = {
@@ -37,10 +39,15 @@ const fieldTitleMap: Record<string, string> = {
   DINGTALK_APP_KEY: '钉钉 App Key',
   DINGTALK_APP_SECRET: '钉钉 App Secret',
   PUSHPLUS_TOKEN: 'PushPlus Token',
+  REPORT_SUMMARY_ONLY: '仅分析结果摘要',
   SCHEDULE_TIME: '定时任务时间',
   HTTP_PROXY: 'HTTP 代理',
   LOG_LEVEL: '日志级别',
   WEBUI_PORT: 'WebUI 端口',
+  AGENT_MODE: '启用 Agent 模式',
+  AGENT_MAX_STEPS: 'Agent 最大步数',
+  AGENT_SKILLS: 'Agent 激活技能',
+  AGENT_STRATEGY_DIR: 'Agent 策略目录',
   BACKTEST_ENABLED: '启用回测',
   BACKTEST_EVAL_WINDOW_DAYS: '回测评估窗口（交易日）',
   BACKTEST_MIN_AGE_DAYS: '回测最小历史天数',
@@ -65,10 +72,15 @@ const fieldDescriptionMap: Record<string, string> = {
   DINGTALK_APP_KEY: '钉钉应用模式 App Key。',
   DINGTALK_APP_SECRET: '钉钉应用模式 App Secret。',
   PUSHPLUS_TOKEN: 'PushPlus 推送令牌。',
+  REPORT_SUMMARY_ONLY: '仅推送分析结果摘要，不包含个股详情。多股时适合快速浏览。',
   SCHEDULE_TIME: '每日定时任务执行时间，格式为 HH:MM。',
   HTTP_PROXY: '网络代理地址，可留空。',
   LOG_LEVEL: '设置日志输出级别。',
   WEBUI_PORT: 'Web 页面服务监听端口。',
+  AGENT_MODE: '是否启用 ReAct Agent 进行股票分析。',
+  AGENT_MAX_STEPS: 'Agent 思考和调用工具的最大步数。',
+  AGENT_SKILLS: '逗号分隔的激活技能/策略列表，例如：trend_following,value_investing。',
+  AGENT_STRATEGY_DIR: '存放 Agent 策略 YAML 文件的目录路径。',
   BACKTEST_ENABLED: '是否启用回测功能（true/false）。',
   BACKTEST_EVAL_WINDOW_DAYS: '回测评估窗口长度，单位为交易日。',
   BACKTEST_MIN_AGE_DAYS: '仅回测早于该天数的分析记录。',

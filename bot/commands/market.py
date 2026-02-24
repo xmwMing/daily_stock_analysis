@@ -88,7 +88,8 @@ class MarketCommand(BotCommand):
                     bocha_keys=config.bocha_api_keys,
                     tavily_keys=config.tavily_api_keys,
                     brave_keys=config.brave_api_keys,
-                    serpapi_keys=config.serpapi_keys
+                    serpapi_keys=config.serpapi_keys,
+                    news_max_age_days=config.news_max_age_days,
                 )
 
             # 初始化 AI 分析器
@@ -96,10 +97,14 @@ class MarketCommand(BotCommand):
             if config.gemini_api_key or config.openai_api_key:
                 analyzer = GeminiAnalyzer()
 
+            # 读取配置中的市场区域，与定时任务/CLI 保持一致
+            region = getattr(config, 'market_review_region', 'cn')
+
             # 执行复盘
             market_analyzer = MarketAnalyzer(
                 search_service=search_service,
-                analyzer=analyzer
+                analyzer=analyzer,
+                region=region,
             )
 
             review_report = market_analyzer.run_daily_review()

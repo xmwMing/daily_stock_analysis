@@ -26,6 +26,7 @@ const CATEGORY_DISPLAY_ORDER: Record<string, number> = {
   data_source: 30,
   notification: 40,
   system: 50,
+  agent: 55,
   backtest: 60,
   uncategorized: 99,
 };
@@ -323,6 +324,7 @@ export function useSystemConfig() {
   return {
     // Server state
     configVersion,
+    maskToken,
     serverItems,
     categories,
     itemsByCategory,

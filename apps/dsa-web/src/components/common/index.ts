@@ -1,5 +1,6 @@
 export * from './Button';
 export * from './Card';
+export * from './EyeToggleIcon';
 export * from './Loading';
 export * from './Drawer';
 export * from './Collapsible';

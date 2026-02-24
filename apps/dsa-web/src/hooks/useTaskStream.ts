@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { analysisApi } from '../api/analysis';
 import type { TaskInfo } from '../types/analysis';
 
@@ -89,8 +89,9 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
   } = options;
 
   const eventSourceRef = useRef<EventSource | null>(null);
-  const isConnectedRef = useRef(false);
+  const [isConnected, setIsConnected] = useState(false);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectRef = useRef<() => void>(() => {});
 
   // 使用 ref 存储回调，避免 SSE 连接因回调变化而频繁重连
   const callbacksRef = useRef({
@@ -149,12 +150,12 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
     }
 
     const url = analysisApi.getTaskStreamUrl();
-    const eventSource = new EventSource(url);
+    const eventSource = new EventSource(url, { withCredentials: true });
     eventSourceRef.current = eventSource;
 
     // 连接成功
     eventSource.addEventListener('connected', () => {
-      isConnectedRef.current = true;
+      setIsConnected(true);
       callbacksRef.current.onConnected?.();
     });
 
@@ -189,14 +190,14 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
 
     // 错误处理
     eventSource.onerror = (error) => {
-      isConnectedRef.current = false;
+      setIsConnected(false);
       callbacksRef.current.onError?.(error);
 
-      // 自动重连
+      // 自动重连（通过 ref 避免闭包引用未声明的 connect）
       if (autoReconnect && enabled) {
         eventSource.close();
         reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
+          connectRef.current();
         }, reconnectDelay);
       }
     };
@@ -207,7 +208,11 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
     parseEventData,
   ]);
 
-  // 断开连接
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  // 断开连接（setState 延后执行，避免 effect 内同步 setState 触发级联渲染）
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -217,7 +222,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-    isConnectedRef.current = false;
+    queueMicrotask(() => setIsConnected(false));
   }, []);
 
   // 重连
@@ -240,7 +245,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
   }, [enabled, connect, disconnect]);
 
   return {
-    isConnected: isConnectedRef.current,
+    isConnected,
     reconnect,
     disconnect,
   };

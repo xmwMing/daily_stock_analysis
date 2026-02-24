@@ -365,6 +365,15 @@ class GeminiAnalyzer:
 - 行业政策利空
 - 大额解禁
 
+### 6. 估值关注（PE/PB）
+- 分析时请关注市盈率（PE）是否合理
+- PE 明显偏高时（如远超行业平均或历史均值），需在风险点中说明
+- 高成长股可适当容忍较高 PE，但需有业绩支撑
+
+### 7. 强势趋势股放宽
+- 强势趋势股（多头排列且趋势强度高、量能配合）可适当放宽乖离率要求
+- 此类股票可轻仓追踪，但仍需设置止损，不盲目追高
+
 ## 输出格式：决策仪表盘 JSON
 
 请严格按照以下 JSON 格式输出，这是一个完整的【决策仪表盘】：
@@ -441,10 +450,11 @@ class GeminiAnalyzer:
             },
             "action_checklist": [
                 "✅/⚠️/❌ 检查项1：多头排列",
-                "✅/⚠️/❌ 检查项2：乖离率<5%",
+                "✅/⚠️/❌ 检查项2：乖离率合理（强势趋势可放宽）",
                 "✅/⚠️/❌ 检查项3：量能配合",
                 "✅/⚠️/❌ 检查项4：无重大利空",
-                "✅/⚠️/❌ 检查项5：筹码健康"
+                "✅/⚠️/❌ 检查项5：筹码健康",
+                "✅/⚠️/❌ 检查项6：PE估值合理"
             ]
         }
     },
@@ -511,7 +521,7 @@ class GeminiAnalyzer:
         """
         初始化 AI 分析器
 
-        优先级：Gemini > OpenAI 兼容 API
+        优先级：Gemini > Anthropic > OpenAI
 
         Args:
             api_key: Gemini API Key（可选，默认从配置读取）
@@ -522,26 +532,60 @@ class GeminiAnalyzer:
         self._current_model_name = None  # 当前使用的模型名称
         self._using_fallback = False  # 是否正在使用备选模型
         self._use_openai = False  # 是否使用 OpenAI 兼容 API
+        self._use_anthropic = False  # 是否使用 Anthropic Claude API
         self._openai_client = None  # OpenAI 客户端
+        self._anthropic_client = None  # Anthropic 客户端
 
         # 检查 Gemini API Key 是否有效（过滤占位符）
         gemini_key_valid = self._api_key and not self._api_key.startswith('your_') and len(self._api_key) > 10
 
-        # 优先尝试初始化 Gemini
+        # 优先级：Gemini > Anthropic > OpenAI
         if gemini_key_valid:
             try:
                 self._init_model()
             except Exception as e:
-                logger.warning(f"Gemini 初始化失败: {e}，尝试 OpenAI 兼容 API")
-                self._init_openai_fallback()
+                logger.warning(f"Gemini init failed: {e}, trying Anthropic then OpenAI")
+                self._try_anthropic_then_openai()
         else:
-            # Gemini Key 未配置，尝试 OpenAI
-            logger.info("Gemini API Key 未配置，尝试使用 OpenAI 兼容 API")
-            self._init_openai_fallback()
+            logger.info("Gemini API Key not configured, trying Anthropic then OpenAI")
+            self._try_anthropic_then_openai()
 
-        # 两者都未配置
-        if not self._model and not self._openai_client:
-            logger.warning("未配置任何 AI API Key，AI 分析功能将不可用")
+        if not self._model and not self._anthropic_client and not self._openai_client:
+            logger.warning("No AI API Key configured, AI analysis will be unavailable")
+
+    def _try_anthropic_then_openai(self) -> None:
+        """优先尝试 Anthropic，其次 OpenAI 作为备选。两者均初始化以供运行时互为故障转移（如 Anthropic 429 时切 OpenAI）。"""
+        self._init_anthropic_fallback()
+        self._init_openai_fallback()
+
+    def _init_anthropic_fallback(self) -> None:
+        """
+        初始化 Anthropic Claude API 作为备选。
+
+        使用 Anthropic Messages API：https://docs.anthropic.com/en/api/messages
+        """
+        config = get_config()
+        anthropic_key_valid = (
+            config.anthropic_api_key
+            and not config.anthropic_api_key.startswith('your_')
+            and len(config.anthropic_api_key) > 10
+        )
+        if not anthropic_key_valid:
+            logger.debug("Anthropic API Key not configured or invalid")
+            return
+        try:
+            from anthropic import Anthropic
+
+            self._anthropic_client = Anthropic(api_key=config.anthropic_api_key)
+            self._current_model_name = config.anthropic_model
+            self._use_anthropic = True
+            logger.info(
+                f"Anthropic Claude API init OK (model: {config.anthropic_model})"
+            )
+        except ImportError:
+            logger.error("anthropic package not installed, run: pip install anthropic")
+        except Exception as e:
+            logger.error(f"Anthropic API init failed: {e}")
 
     def _init_openai_fallback(self) -> None:
         """
@@ -578,6 +622,8 @@ class GeminiAnalyzer:
             client_kwargs = {"api_key": config.openai_api_key}
             if config.openai_base_url and config.openai_base_url.startswith('http'):
                 client_kwargs["base_url"] = config.openai_base_url
+            if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
+                client_kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
 
             self._openai_client = OpenAI(**client_kwargs)
             self._current_model_name = config.openai_model
@@ -668,8 +714,77 @@ class GeminiAnalyzer:
             return False
 
     def is_available(self) -> bool:
-        """检查分析器是否可用"""
-        return self._model is not None or self._openai_client is not None
+        """检查分析器是否可用。"""
+        return (
+            self._model is not None
+            or self._anthropic_client is not None
+            or self._openai_client is not None
+        )
+
+    def _call_anthropic_api(self, prompt: str, generation_config: dict) -> str:
+        """
+        调用 Anthropic Claude Messages API。
+
+        Args:
+            prompt: 用户提示词
+            generation_config: 生成配置（temperature, max_output_tokens）
+
+        Returns:
+            响应文本
+        """
+        config = get_config()
+        max_retries = config.gemini_max_retries
+        base_delay = config.gemini_retry_delay
+        temperature = generation_config.get(
+            'temperature', config.anthropic_temperature
+        )
+        max_tokens = generation_config.get('max_output_tokens', config.anthropic_max_tokens)
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    delay = min(delay, 60)
+                    logger.info(
+                        f"[Anthropic] Retry {attempt + 1}/{max_retries}, "
+                        f"waiting {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+
+                message = self._anthropic_client.messages.create(
+                    model=self._current_model_name,
+                    max_tokens=max_tokens,
+                    system=self.SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                )
+                if (
+                    message.content
+                    and len(message.content) > 0
+                    and hasattr(message.content[0], 'text')
+                ):
+                    return message.content[0].text
+                raise ValueError("Anthropic API returned empty response")
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = (
+                    '429' in error_str
+                    or 'rate' in error_str.lower()
+                    or 'quota' in error_str.lower()
+                )
+                if is_rate_limit:
+                    logger.warning(
+                        f"[Anthropic] Rate limit, attempt {attempt + 1}/"
+                        f"{max_retries}: {error_str[:100]}"
+                    )
+                else:
+                    logger.warning(
+                        f"[Anthropic] API failed, attempt {attempt + 1}/"
+                        f"{max_retries}: {error_str[:100]}"
+                    )
+                if attempt == max_retries - 1:
+                    raise
+        raise Exception("Anthropic API failed after max retries")
 
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
         """
@@ -774,7 +889,19 @@ class GeminiAnalyzer:
         Returns:
             响应文本
         """
-        # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
+        # 若使用 Anthropic，调用 Anthropic（失败时回退到 OpenAI）
+        if self._use_anthropic:
+            try:
+                return self._call_anthropic_api(prompt, generation_config)
+            except Exception as anthropic_error:
+                if self._openai_client:
+                    logger.warning(
+                        "[Anthropic] All retries failed, falling back to OpenAI"
+                    )
+                    return self._call_openai_api(prompt, generation_config)
+                raise anthropic_error
+
+        # 若使用 OpenAI（仅当无 Anthropic 时为主选）
         if self._use_openai:
             return self._call_openai_api(prompt, generation_config)
 
@@ -826,26 +953,59 @@ class GeminiAnalyzer:
                     # 非限流错误，记录并继续重试
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
 
-        # Gemini 所有重试都失败，尝试 OpenAI 兼容 API
+        # Gemini 重试耗尽，尝试 Anthropic 再 OpenAI
+        if self._anthropic_client:
+            logger.warning("[Gemini] All retries failed, switching to Anthropic")
+            try:
+                return self._call_anthropic_api(prompt, generation_config)
+            except Exception as anthropic_error:
+                logger.warning(
+                    f"[Anthropic] Fallback failed: {anthropic_error}"
+                )
+                if self._openai_client:
+                    logger.warning("[Gemini] Trying OpenAI as final fallback")
+                    try:
+                        return self._call_openai_api(prompt, generation_config)
+                    except Exception as openai_error:
+                        logger.error(
+                            f"[OpenAI] Final fallback also failed: {openai_error}"
+                        )
+                        raise last_error or anthropic_error or openai_error
+                raise last_error or anthropic_error
+
         if self._openai_client:
-            logger.warning("[Gemini] 所有重试失败，切换到 OpenAI 兼容 API")
+            logger.warning("[Gemini] All retries failed, switching to OpenAI")
             try:
                 return self._call_openai_api(prompt, generation_config)
             except Exception as openai_error:
-                logger.error(f"[OpenAI] 备选 API 也失败: {openai_error}")
+                logger.error(f"[OpenAI] Fallback also failed: {openai_error}")
                 raise last_error or openai_error
-        elif config.openai_api_key and config.openai_base_url:
-            # 尝试懒加载初始化 OpenAI
-            logger.warning("[Gemini] 所有重试失败，尝试初始化 OpenAI 兼容 API")
+        # 懒加载 Anthropic，再尝试 OpenAI
+        if config.anthropic_api_key and not self._anthropic_client:
+            logger.warning("[Gemini] Trying lazy-init Anthropic API")
+            self._init_anthropic_fallback()
+            if self._anthropic_client:
+                try:
+                    return self._call_anthropic_api(prompt, generation_config)
+                except Exception as ae:
+                    logger.warning(f"[Anthropic] Lazy fallback failed: {ae}")
+                    if self._openai_client:
+                        try:
+                            return self._call_openai_api(prompt, generation_config)
+                        except Exception as oe:
+                            raise last_error or ae or oe
+                    raise last_error or ae
+        if config.openai_api_key and not self._openai_client:
+            logger.warning("[Gemini] Trying lazy-init OpenAI API")
             self._init_openai_fallback()
             if self._openai_client:
                 try:
                     return self._call_openai_api(prompt, generation_config)
                 except Exception as openai_error:
-                    logger.error(f"[OpenAI] 备选 API 也失败: {openai_error}")
+                    logger.error(f"[OpenAI] Lazy fallback also failed: {openai_error}")
                     raise last_error or openai_error
 
-        # 所有方式都失败
+        # 所有备选均耗尽
         raise last_error or Exception("所有 AI API 调用失败，已达最大重试次数")
 
     def analyze(
@@ -936,8 +1096,12 @@ class GeminiAnalyzer:
 
             logger.info(f"[LLM调用] 开始调用 {api_name} (模型: {model_name}, temperature={generation_config['temperature']}, max_tokens={generation_config['max_output_tokens']})...")
 
-            # 根据实际使用的 API 显示日志
-            api_provider = "OpenAI" if self._use_openai else "Gemini"
+            # 记录实际使用的 API 提供方
+            api_provider = (
+                "OpenAI" if self._use_openai
+                else "Anthropic" if self._use_anthropic
+                else "Gemini"
+            )
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
 
             # 使用带重试的 API 调用
@@ -1141,7 +1305,17 @@ class GeminiAnalyzer:
 ## ✅ 分析任务
 
 请为 **{stock_name}({code})** 生成【决策仪表盘】，严格按照 JSON 格式输出。
+"""
+        if context.get('is_index_etf'):
+            prompt += """
+> ⚠️ **指数/ETF 分析约束**：该标的为指数跟踪型 ETF 或市场指数。
+> - 风险分析仅关注：**指数走势、跟踪误差、市场流动性**
+> - 严禁将基金公司的诉讼、声誉、高管变动纳入风险警报
+> - 业绩预期基于**指数成分股整体表现**，而非基金公司财报
+> - `risk_alerts` 中不得出现基金管理人相关的公司经营风险
 
+"""
+        prompt += f"""
 ### ⚠️ 重要：股票名称确认
 如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
 
@@ -1454,7 +1628,7 @@ class GeminiAnalyzer:
 
 # 便捷函数
 def get_analyzer() -> GeminiAnalyzer:
-    """获取 Gemini 分析器实例"""
+    """获取 LLM 分析器实例"""
     return GeminiAnalyzer()
 
 

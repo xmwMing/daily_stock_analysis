@@ -39,6 +39,8 @@ from tenacity import (
     before_sleep_log,
 )
 
+from patch.eastmoney_patch import eastmoney_patch
+from src.config import get_config
 from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS
 from .realtime_types import (
     UnifiedRealtimeQuote, RealtimeSource,
@@ -182,6 +184,9 @@ class EfinanceFetcher(BaseFetcher):
         self.sleep_min = sleep_min
         self.sleep_max = sleep_max
         self._last_request_time: Optional[float] = None
+        # 东财补丁开启才执行打补丁操作
+        if get_config().enable_eastmoney_patch:
+            eastmoney_patch()
 
     def _set_random_user_agent(self) -> None:
         """
@@ -657,10 +662,12 @@ class EfinanceFetcher(BaseFetcher):
             circuit_breaker.record_failure(source_key, str(e))
             return None
 
-    def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
+    def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """
-        获取主要指数实时行情 (efinance)
+        获取主要指数实时行情 (efinance)，仅支持 A 股
         """
+        if region != "cn":
+            return None
         import efinance as ef
 
         indices_map = {

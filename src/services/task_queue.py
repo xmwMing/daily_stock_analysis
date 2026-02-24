@@ -26,6 +26,8 @@ from typing import Optional, Dict, Set, List, Callable, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from asyncio import Queue as AsyncQueue
 
+from data_provider.base import canonical_stock_code
+
 logger = logging.getLogger(__name__)
 
 
@@ -215,6 +217,7 @@ class AnalysisTaskQueue:
         Raises:
             DuplicateTaskError: 股票正在分析中
         """
+        stock_code = canonical_stock_code(stock_code)
         with self._data_lock:
             # 检查重复
             if stock_code in self._analyzing_stocks:

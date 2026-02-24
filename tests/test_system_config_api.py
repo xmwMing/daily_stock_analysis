@@ -5,14 +5,18 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+import src.auth as auth
 from api.app import create_app
 from src.config import Config
 
 
 class SystemConfigApiTestCase(unittest.TestCase):
+    """System config API tests run with auth disabled (test config API in isolation)."""
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_path = Path(self.temp_dir.name) / ".env"
@@ -23,6 +27,7 @@ class SystemConfigApiTestCase(unittest.TestCase):
                     "GEMINI_API_KEY=secret-key-value",
                     "SCHEDULE_TIME=18:00",
                     "LOG_LEVEL=INFO",
+                    "ADMIN_AUTH_ENABLED=false",
                 ]
             )
             + "\n",
@@ -31,10 +36,15 @@ class SystemConfigApiTestCase(unittest.TestCase):
         os.environ["ENV_FILE"] = str(self.env_path)
         Config.reset_instance()
 
+        auth._auth_enabled = None
+        self.auth_patcher = patch.object(auth, "_is_auth_enabled_from_env", return_value=False)
+        self.auth_patcher.start()
+
         app = create_app(static_dir=Path(self.temp_dir.name) / "empty-static")
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
+        self.auth_patcher.stop()
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
         self.temp_dir.cleanup()

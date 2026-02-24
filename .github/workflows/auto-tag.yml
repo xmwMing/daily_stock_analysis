@@ -36,3 +36,6 @@ jobs:
           WITH_V: true              # tag 格式带 v 前缀，如 v2.1.1
           DEFAULT_BUMP: patch       # 默认增加补丁版本 +0.0.1
           INITIAL_VERSION: 2.1.0    # 如果没有 tag，从这个版本开始
+          PATCH_STRING_TOKEN: '#patch'
+          MINOR_STRING_TOKEN: '#minor'
+          MAJOR_STRING_TOKEN: '#major'

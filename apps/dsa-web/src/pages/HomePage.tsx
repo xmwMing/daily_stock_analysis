@@ -1,5 +1,6 @@
 import type React from 'react';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { HistoryItem, AnalysisReport, TaskInfo } from '../types/analysis';
 import { historyApi } from '../api/history';
 import { analysisApi, DuplicateTaskError } from '../api/analysis';
@@ -17,6 +18,7 @@ import { useTaskStream } from '../hooks';
  */
 const HomePage: React.FC = () => {
   const { setLoading, setError: setStoreError } = useAnalysisStore();
+  const navigate = useNavigate();
 
   // 输入状态
   const [stockCode, setStockCode] = useState('');
@@ -150,7 +152,7 @@ const HomePage: React.FC = () => {
   // 初始加载 - 自动选择第一条
   useEffect(() => {
     fetchHistory(true);
-  }, []);
+  }, [fetchHistory]);
 
   // 点击历史项加载报告
   const handleHistoryClick = async (queryId: string) => {
@@ -223,11 +225,16 @@ const HomePage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* 顶部输入栏 */}
-      <header className="flex-shrink-0 px-4 py-3 border-b border-white/5">
-        <div className="flex items-center gap-2 max-w-2xl">
-          <div className="flex-1 relative">
+    <div
+      className="min-h-screen grid overflow-hidden w-full"
+      style={{ gridTemplateColumns: 'minmax(12px, 1fr) 256px 24px minmax(auto, 896px) minmax(12px, 1fr)', gridTemplateRows: 'auto 1fr' }}
+    >
+      {/* 顶部输入栏 - 与历史记录框左对齐，与 Market Sentiment 外框右对齐（不含 col5 右 padding） */}
+      <header
+        className="col-start-2 col-end-5 row-start-1 py-3 border-b border-white/5 flex-shrink-0 flex items-center min-w-0 overflow-hidden"
+      >
+        <div className="flex items-center gap-2 w-full min-w-0 flex-1" style={{ maxWidth: 'min(100%, 1168px)' }}>
+          <div className="flex-1 relative min-w-0">
             <input
               type="text"
               value={stockCode}
@@ -251,7 +258,7 @@ const HomePage: React.FC = () => {
             type="button"
             onClick={handleAnalyze}
             disabled={!stockCode || isAnalyzing}
-            className="btn-primary flex items-center gap-1.5 whitespace-nowrap"
+            className="btn-primary flex items-center gap-1.5 whitespace-nowrap flex-shrink-0"
           >
             {isAnalyzing ? (
               <>
@@ -268,53 +275,65 @@ const HomePage: React.FC = () => {
         </div>
       </header>
 
-      {/* 主内容区 */}
-      <main className="flex-1 flex overflow-hidden p-3 gap-3">
-{/* 左侧：任务面板 + 历史列表 */}
-        <div className="flex flex-col gap-3 w-64 flex-shrink-0 overflow-hidden">
-          {/* 任务面板 */}
-          <TaskPanel tasks={activeTasks} />
+      {/* 左侧：任务面板 + 历史列表 */}
+      <div
+        className="col-start-2 row-start-2 flex flex-col gap-3 overflow-hidden min-h-0"
+      >
+        <TaskPanel tasks={activeTasks} />
+        <HistoryList
+          items={historyItems}
+          isLoading={isLoadingHistory}
+          isLoadingMore={isLoadingMore}
+          hasMore={hasMore}
+          selectedQueryId={selectedReport?.meta.queryId}
+          onItemClick={handleHistoryClick}
+          onLoadMore={handleLoadMore}
+          className="max-h-[62vh] overflow-hidden"
+        />
+      </div>
 
-          {/* 历史列表 */}
-          <HistoryList
-            items={historyItems}
-            isLoading={isLoadingHistory}
-            isLoadingMore={isLoadingMore}
-            hasMore={hasMore}
-            selectedQueryId={selectedReport?.meta.queryId}
-            onItemClick={handleHistoryClick}
-            onLoadMore={handleLoadMore}
-            className="max-h-[62vh] overflow-hidden"
-          />
-        </div>
-
-        {/* 右侧报告详情 */}
-        <section className="flex-1 overflow-y-auto pl-1">
-          {isLoadingReport ? (
-            <div className="flex flex-col items-center justify-center h-full">
-              <div className="w-10 h-10 border-3 border-cyan/20 border-t-cyan rounded-full animate-spin" />
-              <p className="mt-3 text-secondary text-sm">加载报告中...</p>
-            </div>
-          ) : selectedReport ? (
-            <div className="max-w-4xl">
-              {/* 报告内容 */}
-              <ReportSummary data={selectedReport} isHistory />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="w-12 h-12 mb-3 rounded-xl bg-elevated flex items-center justify-center">
-                <svg className="w-6 h-6 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      {/* 右侧报告详情 */}
+      <section className="col-start-4 row-start-2 flex-1 overflow-y-auto pl-1 min-w-0 min-h-0">
+        {isLoadingReport ? (
+          <div className="flex flex-col items-center justify-center h-full">
+            <div className="w-10 h-10 border-3 border-cyan/20 border-t-cyan rounded-full animate-spin" />
+            <p className="mt-3 text-secondary text-sm">加载报告中...</p>
+          </div>
+        ) : selectedReport ? (
+          <div className="max-w-4xl">
+            {/* Follow-up button */}
+            <div className="flex items-center justify-end mb-2">
+              <button
+                onClick={() => {
+                  const code = selectedReport.meta.stockCode;
+                  const name = selectedReport.meta.stockName;
+                  const qid = selectedReport.meta.queryId;
+                  navigate(`/chat?stock=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}&queryId=${encodeURIComponent(qid)}`);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan/10 border border-cyan/20 text-cyan text-sm hover:bg-cyan/20 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
-              </div>
-              <h3 className="text-base font-medium text-white mb-1.5">开始分析</h3>
-              <p className="text-xs text-muted max-w-xs">
-                输入股票代码进行分析，或从左侧选择历史报告查看
-              </p>
+                追问 AI
+              </button>
             </div>
-          )}
-        </section>
-      </main>
+            <ReportSummary data={selectedReport} isHistory />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <div className="w-12 h-12 mb-3 rounded-xl bg-elevated flex items-center justify-center">
+              <svg className="w-6 h-6 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+            </div>
+            <h3 className="text-base font-medium text-white mb-1.5">开始分析</h3>
+            <p className="text-xs text-muted max-w-xs">
+              输入股票代码进行分析，或从左侧选择历史报告查看
+            </p>
+          </div>
+        )}
+      </section>
     </div>
   );
 };
