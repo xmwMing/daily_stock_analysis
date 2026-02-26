@@ -47,6 +47,7 @@ from typing import List, Optional
 from data_provider.base import canonical_stock_code
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.market_review import run_market_review
+from src.notification import NotificationService
 
 from src.config import get_config, Config
 from src.logging_config import setup_logging
@@ -555,7 +556,6 @@ def main() -> int:
         if args.market_review:
             from src.analyzer import GeminiAnalyzer
             from src.core.market_review import run_market_review
-            from src.notification import NotificationService
             from src.search_service import SearchService
 
             logger.info("模式: 仅大盘复盘")
