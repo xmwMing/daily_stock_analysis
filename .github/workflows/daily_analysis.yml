@@ -1,9 +1,10 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 每天北京时间 13:30 (UTC 05:30)
+  # 定时触发（工作日）
   schedule:
-    - cron: '30 5 * * 1-5'  # 周一到周五，UTC 05:30 = 北京时间 13:30
+    - cron: '30 5 * * 1-5'  # hot-stocks-only: 周一到周五，北京时间 13:30（UTC 05:30）
+    - cron: '0 6 * * 1-5'   # stocks-only: 周一到周五，北京时间 14:00（UTC 06:00）
   # 手动触发
   workflow_dispatch:
     inputs:
@@ -160,7 +161,18 @@ jobs:
 
         run: |
           # 判断运行模式
-          MODE="${{ github.event.inputs.mode || 'full' }}"
+          # schedule 事件根据 cron 自动选择模式；workflow_dispatch 则使用手动输入
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "30 5 * * 1-5" ]; then
+              MODE="hot-stocks-only"
+            elif [ "${{ github.event.schedule }}" = "0 6 * * 1-5" ]; then
+              MODE="stocks-only"
+            else
+              MODE="full"
+            fi
+          else
+            MODE="${{ github.event.inputs.mode || 'full' }}"
+          fi
 
           echo "=========================================="
           echo "🚀 A股自选股智能分析系统"
