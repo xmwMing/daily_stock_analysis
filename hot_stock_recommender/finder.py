@@ -138,14 +138,8 @@ class HotStockFinder:
             logger.info(f"合并两个榜单后共获得 {len(all_stocks)} 只不重复的热门股票")
             logger.info(f"各榜单获取数量: 飙升榜={self.stats['gainers_count']}, 人气榜={self.stats['turnover_count']}")
 
-            # Apply a lightweight pre-filter before realtime enrichment.
-            candidate_stocks = self._pre_filter_candidates_for_enrich(all_stocks)
-            logger.info(
-                f"轻过滤后候选股票: {len(candidate_stocks)}/{len(all_stocks)}，开始补全实时行情"
-            )
-
-            # Enrich candidates with realtime quote fields.
-            all_stocks = self._enrich_stock_data(candidate_stocks)
+            # 使用DataFetcherManager获取详细实时行情数据
+            all_stocks = self._enrich_stock_data(all_stocks)
 
             # 应用过滤条件
             filtered_stocks = self._apply_filters(all_stocks)
@@ -175,9 +169,6 @@ class HotStockFinder:
         """
         logger.info("[步骤] 丰富股票数据，获取缺失的关键指标...")
 
-        if not stocks:
-            return []
-
         try:
             # 导入DataFetcherManager
             from data_provider import DataFetcherManager
@@ -185,29 +176,12 @@ class HotStockFinder:
             # 创建DataFetcherManager实例
             fetcher_manager = DataFetcherManager()
 
-            # Preload realtime cache for bulk-capable sources when possible.
-            normalized_codes = []
-            seen = set()
-            for stock in stocks:
-                code = self._normalize_code(stock.code)
-                if code and code not in seen:
-                    normalized_codes.append(code)
-                    seen.add(code)
-
-            prefetch_count = 0
-            try:
-                prefetch_count = fetcher_manager.prefetch_realtime_quotes(normalized_codes)
-            except Exception as e:
-                logger.debug(f"[预取] 热门股票实时行情预取失败，将回退逐只查询: {e}")
-
-            if prefetch_count > 0:
-                logger.info(f"[预取] 已为 {prefetch_count} 只候选股票预热实时行情缓存")
-
             # 处理每只股票
             enriched_stocks = []
             for stock in stocks:
                 try:
-                    code = self._normalize_code(stock.code)
+                    # 清理股票代码，移除前缀
+                    code = stock.code.replace('SH', '').replace('SZ', '')
 
                     # 获取实时行情数据
                     logger.debug(f"[获取数据] 处理股票: {code} - {stock.name}")
@@ -215,14 +189,12 @@ class HotStockFinder:
 
                     if quote:
                         # 更新股票数据
-                        stock.price = quote.price if quote.price is not None else stock.price
-                        stock.change_pct = quote.change_pct if quote.change_pct is not None else stock.change_pct
-                        stock.volume = quote.volume if quote.volume is not None else stock.volume
-                        stock.amount = quote.amount if quote.amount is not None else stock.amount
-                        stock.turnover_rate = (
-                            quote.turnover_rate if quote.turnover_rate is not None else stock.turnover_rate
-                        )
-                        stock.market_cap = quote.total_mv if quote.total_mv is not None else stock.market_cap
+                        stock.price = quote.price or stock.price
+                        stock.change_pct = quote.change_pct or stock.change_pct
+                        stock.volume = quote.volume or stock.volume
+                        stock.amount = quote.amount or stock.amount
+                        stock.turnover_rate = quote.turnover_rate or stock.turnover_rate
+                        stock.market_cap = quote.total_mv or stock.market_cap
 
                         # 打印详细的更新信息，便于调试
                         # 构建调试信息，根据实际数据情况显示
@@ -305,7 +277,7 @@ class HotStockFinder:
             df = df.sort_values(by='涨跌幅', ascending=False).head(limit)
 
             logger.info(f"[API返回] 涨幅榜获取成功: 返回 {len(df)} 只股票")
-            logger.debug(f"[API返回] 涨幅榜前5只:\n{df.head(5)[['代码', '名称', '涨跌幅']].to_string(index=False)}")
+            logger.debug(f"[API返回] 涨幅榜前5只: {df.head(5)[['代码', '名称', '涨跌幅']].to_dict('records')}")
 
             # 更新缓存
             self._update_cache(cache_key, df)
@@ -356,7 +328,7 @@ class HotStockFinder:
             df = df.sort_values(by='成交额', ascending=False).head(limit)
 
             logger.info(f"[API返回] 成交额榜获取成功: 返回 {len(df)} 只股票")
-            logger.debug(f"[API返回] 成交额榜前5只:\n{df.head(5)[['代码', '名称', '成交额']].to_string(index=False)}")
+            logger.debug(f"[API返回] 成交额榜前5只: {df.head(5)[['代码', '名称', '成交额']].to_dict('records')}")
 
             # 更新缓存
             self._update_cache(cache_key, df)
@@ -407,7 +379,7 @@ class HotStockFinder:
             df = df.sort_values(by='换手率', ascending=False).head(limit)
 
             logger.info(f"[API返回] 换手率榜获取成功: 返回 {len(df)} 只股票")
-            logger.debug(f"[API返回] 换手率榜前5只:\n{df.head(5)[['代码', '名称', '换手率']].to_string(index=False)}")
+            logger.debug(f"[API返回] 换手率榜前5只: {df.head(5)[['代码', '名称', '换手率']].to_dict('records')}")
 
             # 更新缓存
             self._update_cache(cache_key, df)
@@ -440,23 +412,19 @@ class HotStockFinder:
         try:
             import akshare as ak
 
-            # Prefer dedicated popularity ranking API, fallback to hot-up list.
-            df = None
-            try:
-                logger.info("[API调用] ak.stock_hot_rank_em() 获取人气榜...")
-                df = ak.stock_hot_rank_em()
-            except Exception as rank_err:
-                logger.warning(f"[API警告] stock_hot_rank_em 不可用，回退 stock_hot_up_em: {rank_err}")
+            logger.info(f"[API调用] ak.stock_hot_up_em() 获取人气榜...")
 
-            if df is None or df.empty:
-                logger.info("[API调用] ak.stock_hot_up_em() 回退获取人气榜...")
-                df = ak.stock_hot_up_em()
+            # 获取人气榜数据
+            df = ak.stock_hot_up_em()
 
             if df is None or df.empty:
                 logger.warning("[API返回] 人气榜数据为空")
                 return None
 
-            logger.debug(f"[API返回] 人气榜数据列名: {list(df.columns)}")
+            # 打印列名，了解数据结构
+            logger.info(f"[API返回] 人气榜数据列名: {list(df.columns)}")
+            # 打印前5行完整数据，了解数据格式
+            logger.info(f"[API返回] 人气榜前5行数据: {df.head(5).to_dict('records')}")
 
             # 取前N只
             df = df.head(limit)
@@ -516,11 +484,11 @@ class HotStockFinder:
             try:
                 # 尝试不同的列名组合
                 if '代码' in df.columns and '名称' in df.columns:
-                    logger.debug(f"[API返回] 飙升榜前5只:\n{df.head(5)[['代码', '名称']].to_string(index=False)}")
+                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5)[['代码', '名称']].to_dict('records')}")
                 elif '代码' in df.columns:
-                    logger.debug(f"[API返回] 飙升榜前5只:\n{df.head(5)[['代码']].to_string(index=False)}")
+                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5)[['代码']].to_dict('records')}")
                 else:
-                    logger.debug(f"[API返回] 飙升榜前5只:\n{df.head(5).to_string(index=False)}")
+                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5).to_dict('records')}")
             except Exception as e:
                 logger.debug(f"[API返回] 打印前5只股票失败: {e}")
 
@@ -532,34 +500,6 @@ class HotStockFinder:
         except Exception as e:
             logger.error(f"[API错误] 获取飙升榜失败: {e}", exc_info=True)
             return None
-
-    @staticmethod
-    def _normalize_code(code: str) -> str:
-        """Normalize stock code for fetcher calls."""
-        return (code or "").replace('SH', '').replace('SZ', '').strip()
-
-    def _pre_filter_candidates_for_enrich(self, stocks: List[StockInfo]) -> List[StockInfo]:
-        """Apply cheap filters before realtime enrichment to reduce API calls."""
-        if not stocks:
-            return []
-
-        candidates: List[StockInfo] = []
-        for stock in stocks:
-            if self._is_st_stock(stock.name):
-                continue
-            if not self.include_star_stock and self._is_filtered_board_stock(stock.code):
-                continue
-
-            if stock.price and stock.price > 0:
-                if stock.price < self.min_price or stock.price > self.max_price:
-                    continue
-
-            if stock.list_days > 0 and stock.list_days < self.min_list_days:
-                continue
-
-            candidates.append(stock)
-
-        return candidates
 
     def _row_to_stock_info(self, row: pd.Series) -> Optional[StockInfo]:
         """
@@ -589,38 +529,11 @@ class HotStockFinder:
                 except:
                     return default
 
-            def to_scalar(val):
-                if isinstance(val, pd.Series):
-                    return val.iloc[0] if not val.empty else None
-                return val
-
-            def is_missing(val) -> bool:
-                val = to_scalar(val)
-                if val is None:
-                    return True
-                try:
-                    return bool(pd.isna(val))
-                except Exception:
-                    return False
-
-            def pick_first_value(keys, default=None):
-                for key in keys:
-                    if key not in row.index:
-                        continue
-                    candidate = to_scalar(row.get(key))
-                    if is_missing(candidate):
-                        continue
-                    if isinstance(candidate, str) and not candidate.strip():
-                        continue
-                    return candidate
-                return default
-
             # 计算上市天数（如果有上市日期）
             list_days = 0
-            listing_time = to_scalar(row.get('上市时间', None))
-            if not is_missing(listing_time):
+            if '上市时间' in row and not pd.isna(row['上市时间']):
                 try:
-                    list_date_str = str(listing_time)
+                    list_date_str = str(row['上市时间'])
                     # 尝试解析日期格式
                     if len(list_date_str) == 8:  # YYYYMMDD
                         list_date = datetime.strptime(list_date_str, '%Y%m%d').date()
@@ -629,7 +542,7 @@ class HotStockFinder:
                     else:
                         list_date = None
 
-                    if list_date is not None:
+                    if list_date:
                         list_days = (date.today() - list_date).days
                 except:
                     list_days = 0
@@ -638,22 +551,15 @@ class HotStockFinder:
             logger.debug(f"[API返回] 行数据: {row.to_dict()}")
 
             # 尝试不同的列名组合，确保能够从不同 API 响应中提取数据
-            code = str(pick_first_value(['代码', '证券代码', 'code', 'stock_code'], ''))
-            name = str(pick_first_value(['股票名称', '名称', '证券名称', 'name', 'stock_name'], ''))
-            price = safe_float(pick_first_value(['最新价', 'price', '最新价(元)', 'current_price'], 0.0), 0.0)
-            change_pct = safe_float(pick_first_value(['涨跌幅', '涨跌幅(%)', 'change_pct', '涨跌幅%'], 0.0), 0.0)
-            volume = safe_float(pick_first_value(['成交量', 'volume', '成交量(手)', 'vol'], 0.0), 0.0)
-            amount = safe_float(pick_first_value(['成交额', 'amount', '成交额(万元)', 'turnover'], 0.0), 0.0)
-            turnover_rate = safe_float(pick_first_value(['换手率', 'turnover_rate', '换手率(%)', 'turnover%'], 0.0), 0.0)
-            market_cap = safe_float(pick_first_value(['总市值', 'market_cap', '总市值(亿元)', 'market_value'], 0.0), 0.0)
-            pe_ratio = None
-            for pe_key in ['市盈率-动态', 'pe_ratio', '市盈率', 'pe']:
-                if pe_key in row.index:
-                    pe_value = to_scalar(row.get(pe_key))
-                    if is_missing(pe_value):
-                        continue
-                    pe_ratio = safe_float(pe_value)
-                    break
+            code = str(row.get('代码', '') or row.get('证券代码', '') or row.get('code', '') or row.get('stock_code', ''))
+            name = str(row.get('股票名称', '') or row.get('名称', '') or row.get('证券名称', '') or row.get('name', '') or row.get('stock_name', ''))
+            price = safe_float(row.get('最新价') or row.get('price', '') or row.get('最新价(元)', '') or row.get('current_price', ''))
+            change_pct = safe_float(row.get('涨跌幅') or row.get('涨跌幅(%)', '') or row.get('change_pct', '') or row.get('涨跌幅%', ''))
+            volume = safe_float(row.get('成交量') or row.get('volume', '') or row.get('成交量(手)', '') or row.get('vol', ''))
+            amount = safe_float(row.get('成交额') or row.get('amount', '') or row.get('成交额(万元)', '') or row.get('turnover', ''))
+            turnover_rate = safe_float(row.get('换手率') or row.get('turnover_rate', '') or row.get('换手率(%)', '') or row.get('turnover%', ''))
+            market_cap = safe_float(row.get('总市值') or row.get('market_cap', '') or row.get('总市值(亿元)', '') or row.get('market_value', ''))
+            pe_ratio = safe_float(row.get('市盈率-动态') or row.get('pe_ratio', '') or row.get('市盈率', '') or row.get('pe', '')) if any(key in row for key in ['市盈率-动态', 'pe_ratio', '市盈率', 'pe']) else None
 
             # 打印提取的股票信息
             logger.debug(f"[API返回] 提取的股票信息: code={code}, name={name}, price={price}")
