@@ -371,7 +371,6 @@ def run_full_analysis(
 
                 # 保存推荐报告到文件
                 if hot_stock_report:
-                    from datetime import datetime
                     date_str = datetime.now().strftime('%Y%m%d')
                     report_filename = f"hot_stock_recommendations_{date_str}.md"
                     filepath = pipeline.notifier.save_report_to_file(
@@ -691,28 +690,76 @@ def main() -> int:
                     # 创建推荐系统实例
                     hot_recommender = HotStockRecommender()
 
-                    # 执行推荐流程
-                    hot_stock_report = hot_recommender.run()
+                    # Step 1: 生成热门股票推荐（结构化结果）
+                    recommendations = hot_recommender.get_recommendations()
 
-                    # 保存推荐报告到文件
-                    if hot_stock_report:
+                    # 提取推荐代码（最多5只）并规范化
+                    top_stock_codes: List[str] = []
+                    for rec in recommendations[:5]:
+                        code = canonical_stock_code(rec.stock_info.code)
+                        if code and code not in top_stock_codes:
+                            top_stock_codes.append(code)
+
+                    logger.info(f"热门推荐 Top{len(top_stock_codes)} 股票: {', '.join(top_stock_codes) if top_stock_codes else '无'}")
+
+                    # Step 2: 对热门推荐股票执行 stocks-only 分析
+                    stocks_only_results = []
+                    stocks_only_report = ""
+                    if top_stock_codes:
+                        logger.info("开始对热门推荐股票执行 stocks-only 二次分析...")
+                        query_id = uuid.uuid4().hex
+                        pipeline = StockAnalysisPipeline(
+                            config=config,
+                            max_workers=args.workers,
+                            query_id=query_id,
+                            query_source="cli",
+                            save_context_snapshot=(False if getattr(args, 'no_context_snapshot', False) else None),
+                        )
+                        stocks_only_results = pipeline.run(
+                            stock_codes=top_stock_codes,
+                            dry_run=args.dry_run,
+                            send_notification=False,
+                            merge_notification=False,
+                        )
+
+                        if stocks_only_results:
+                            stocks_only_report = pipeline.notifier.generate_dashboard_report(stocks_only_results)
+
+                    # Step 3: 生成最终报告（保持 stocks-only 格式，仅增加“热门股票推荐”字样）
+                    if top_stock_codes and stocks_only_report:
+                        final_report = stocks_only_report
+                        if "个股决策仪表盘" in final_report:
+                            final_report = final_report.replace("个股决策仪表盘", "热门股票推荐个股决策仪表盘", 1)
+                        else:
+                            final_report = f"# 🔥 热门股票推荐\n\n{final_report}"
+                    elif top_stock_codes:
+                        final_report = (
+                            "# 🔥 热门股票推荐\n\n"
+                            "本轮已选出热门股票，但 stocks-only 二次分析未生成有效结果，请稍后重试。"
+                        )
+                    else:
+                        final_report = (
+                            "# 🔥 热门股票推荐\n\n"
+                            "本轮热门推荐为空，未触发 stocks-only 二次分析。"
+                        )
+
+                    # 保存最终综合报告到文件
+                    if final_report:
                         date_str = datetime.now().strftime('%Y%m%d')
-                        report_filename = f"hot_stock_recommendations_{date_str}.md"
+                        report_filename = f"hot_stock_comprehensive_{date_str}.md"
                         filepath = notifier.save_report_to_file(
-                            hot_stock_report,
+                            final_report,
                             report_filename
                         )
-                        logger.info(f"热门股票推荐报告已保存: {filepath}")
+                        logger.info(f"热门股票综合分析报告已保存: {filepath}")
 
-                        # 推送通知（如果启用）
+                        # 推送通知（如果启用）：仅推送最终综合报告
                         if not args.no_notify and notifier.is_available():
-                            # 添加标题
-                            report_content = f"# 🔥 热门股票推荐\n\n{hot_stock_report}"
-                            success = notifier.send(report_content)
+                            success = notifier.send(final_report)
                             if success:
-                                logger.info("热门股票推荐推送成功")
+                                logger.info("热门股票综合分析推送成功")
                             else:
-                                logger.warning("热门股票推荐推送失败")
+                                logger.warning("热门股票综合分析推送失败")
 
                 except Exception as e:
                     logger.error(f"热门股票推荐失败: {e}")
