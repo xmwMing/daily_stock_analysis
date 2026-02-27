@@ -685,6 +685,11 @@ def get_config() -> Config:
 
 
 # === 热门股票推荐配置 ===
+# Ensure .env is loaded before reading HOT_STOCK_* values at module import time.
+# Without this, HOT_STOCK_CONFIG may ignore values that only exist in .env
+# (e.g. HOT_STOCK_FETCH_COUNT) when src.config is imported before get_config().
+setup_env()
+
 HOT_STOCK_CONFIG = {
     'cache_ttl': 1800,           # 缓存有效期（秒），默认30分钟
     'top_n': int(os.getenv('HOT_STOCK_TOP_N', '5')),  # 推荐数量，从环境变量获取，默认5只

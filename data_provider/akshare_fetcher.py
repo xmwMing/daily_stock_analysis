@@ -1004,6 +1004,7 @@ class AkshareFetcher(BaseFetcher):
                 change_pct=safe_float(fields[31]),
                 change_amount=safe_float(fields[30]) if len(fields) > 30 else None,
                 volume=safe_int(fields[6]) * 100 if fields[6] else None,  # 腾讯返回的是手，转为股
+                amount=safe_float(fields[37]) * 10000 if len(fields) > 37 and fields[37] else None,  # 成交额(万->元)
                 open_price=safe_float(fields[5]),
                 high=safe_float(fields[34]) if len(fields) > 34 else None,
                 low=safe_float(fields[35].split('/')[0]) if len(fields) > 35 and '/' in str(fields[35]) else safe_float(fields[35]) if len(fields) > 35 else None,

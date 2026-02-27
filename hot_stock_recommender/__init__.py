@@ -52,7 +52,7 @@ class HotStockRecommender:
         self.trend_analyzer = trend_analyzer or StockTrendAnalyzer()
 
         # 初始化各组件
-        self.finder = HotStockFinder()
+        self.finder = HotStockFinder(data_manager=self.data_fetcher)
         self.recommender = StockRecommender(
             data_manager=self.data_fetcher,
             trend_analyzer=self.trend_analyzer

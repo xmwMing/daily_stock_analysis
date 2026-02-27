@@ -18,10 +18,12 @@ Requirements:
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 
+from data_provider import DataFetcherManager
 from .models import StockInfo
 from src.config import HOT_STOCK_CONFIG
 
@@ -40,7 +42,12 @@ class HotStockFinder:
         _cache_timestamps: 缓存时间戳字典
     """
 
-    def __init__(self, cache_ttl: int = 1800):
+    def __init__(
+        self,
+        cache_ttl: int = 1800,
+        data_manager: Optional[DataFetcherManager] = None,
+        enrich_workers: Optional[int] = None,
+    ):
         """
         初始化发现器
 
@@ -50,6 +57,7 @@ class HotStockFinder:
         self.cache_ttl = cache_ttl
         self._cache: Dict[str, pd.DataFrame] = {}
         self._cache_timestamps: Dict[str, float] = {}
+        self.data_manager = data_manager or DataFetcherManager()
 
         # 从配置加载过滤条件
         filter_config = HOT_STOCK_CONFIG.get('filter', {})
@@ -60,6 +68,8 @@ class HotStockFinder:
 
         # 从配置加载获取数量
         self.fetch_count = HOT_STOCK_CONFIG.get('fetch_count', 30)
+        configured_workers = int(HOT_STOCK_CONFIG.get('max_concurrent', 10))
+        self.enrich_workers = enrich_workers if enrich_workers is not None else max(1, min(configured_workers, 6))
 
         # 统计信息
         self.stats = {
@@ -71,7 +81,7 @@ class HotStockFinder:
         }
 
         logger.info(f"HotStockFinder 初始化完成: 缓存TTL={cache_ttl}秒, "
-                   f"每个榜单获取{self.fetch_count}只, "
+                   f"每个榜单获取{self.fetch_count}只, enrich并发={self.enrich_workers}, "
                    f"过滤条件=[价格:{self.min_price}-{self.max_price}元, "
                    f"上市>={self.min_list_days}天, "
                    f"科创板/创业板股票={self.include_star_stock}]")
@@ -99,13 +109,36 @@ class HotStockFinder:
         start_time = time.time()
 
         try:
-            # 获取人气榜和飙升榜的数据（使用配置的数量）
-            popularity_df = self._fetch_popularity_ranking(limit=self.fetch_count)
-            surge_df = self._fetch_surge_ranking(limit=self.fetch_count)
+            # 获取热门榜单数据（并行抓取，减少总耗时）
+            popularity_df = None
+            surge_df = None
+            deal_df = None
+
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                future_to_name = {
+                    executor.submit(self._fetch_popularity_ranking, self.fetch_count): 'popularity',
+                    executor.submit(self._fetch_surge_ranking, self.fetch_count): 'surge',
+                    executor.submit(self._fetch_deal_ranking, self.fetch_count): 'deal',
+                }
+
+                for future in as_completed(future_to_name):
+                    name = future_to_name[future]
+                    try:
+                        df = future.result()
+                    except Exception as e:
+                        logger.error(f"获取榜单失败: {name}, error={e}", exc_info=True)
+                        df = None
+
+                    if name == 'popularity':
+                        popularity_df = df
+                    elif name == 'surge':
+                        surge_df = df
+                    elif name == 'deal':
+                        deal_df = df
 
             # 更新统计信息
             self.stats['gainers_count'] = len(surge_df) if surge_df is not None and not surge_df.empty else 0
-            self.stats['volume_count'] = 0
+            self.stats['volume_count'] = len(deal_df) if deal_df is not None and not deal_df.empty else 0
             self.stats['turnover_count'] = len(popularity_df) if popularity_df is not None and not popularity_df.empty else 0
 
             # 合并两个榜单
@@ -132,11 +165,24 @@ class HotStockFinder:
                             all_stocks.append(stock_info)
                             stock_codes_seen.add(code)
 
+            # 处理讨论热榜
+            if deal_df is not None and not deal_df.empty:
+                for _, row in deal_df.iterrows():
+                    code = str(row.get('代码', ''))
+                    if code and code not in stock_codes_seen:
+                        stock_info = self._row_to_stock_info(row)
+                        if stock_info:
+                            all_stocks.append(stock_info)
+                            stock_codes_seen.add(code)
+
             # 更新总数量统计
             self.stats['total_before_filter'] = len(all_stocks)
 
             logger.info(f"合并两个榜单后共获得 {len(all_stocks)} 只不重复的热门股票")
-            logger.info(f"各榜单获取数量: 飙升榜={self.stats['gainers_count']}, 人气榜={self.stats['turnover_count']}")
+            logger.info(
+                f"各榜单获取数量: 飙升榜={self.stats['gainers_count']}, "
+                f"人气榜={self.stats['turnover_count']}, 讨论榜={self.stats['volume_count']}"
+            )
 
             # 使用DataFetcherManager获取详细实时行情数据
             all_stocks = self._enrich_stock_data(all_stocks)
@@ -170,64 +216,12 @@ class HotStockFinder:
         logger.info("[步骤] 丰富股票数据，获取缺失的关键指标...")
 
         try:
-            # 导入DataFetcherManager
-            from data_provider import DataFetcherManager
+            if not stocks:
+                return []
 
-            # 创建DataFetcherManager实例
-            fetcher_manager = DataFetcherManager()
-
-            # 处理每只股票
-            enriched_stocks = []
-            for stock in stocks:
-                try:
-                    # 清理股票代码，移除前缀
-                    code = stock.code.replace('SH', '').replace('SZ', '')
-
-                    # 获取实时行情数据
-                    logger.debug(f"[获取数据] 处理股票: {code} - {stock.name}")
-                    quote = fetcher_manager.get_realtime_quote(code)
-
-                    if quote:
-                        # 更新股票数据
-                        stock.price = quote.price or stock.price
-                        stock.change_pct = quote.change_pct or stock.change_pct
-                        stock.volume = quote.volume or stock.volume
-                        stock.amount = quote.amount or stock.amount
-                        stock.turnover_rate = quote.turnover_rate or stock.turnover_rate
-                        stock.market_cap = quote.total_mv or stock.market_cap
-
-                        # 打印详细的更新信息，便于调试
-                        # 构建调试信息，根据实际数据情况显示
-                        debug_info = f"[更新数据] {code} {stock.name}: "
-                        debug_info += f"价格={stock.price}, 涨跌={stock.change_pct}%, "
-                        debug_info += f"成交量={stock.volume}, 成交额={stock.amount}, "
-                        debug_info += f"换手率={stock.turnover_rate}%"
-
-                        # 只在市值有有效数据时显示
-                        if stock.market_cap and stock.market_cap > 0:
-                            debug_info += f", 市值={stock.market_cap}"
-
-                        logger.debug(debug_info)
-
-                        # 构建获取成功信息
-                        success_info = f"[获取成功] {code} {stock.name}: 价格={stock.price}, 涨跌={stock.change_pct}%, "
-                        success_info += f"成交量={stock.volume}, 成交额={stock.amount}, "
-                        success_info += f"换手率={stock.turnover_rate}%"
-
-                        # 只在市值有有效数据时显示
-                        if stock.market_cap and stock.market_cap > 0:
-                            success_info += f", 市值={stock.market_cap}"
-
-                        logger.debug(success_info)
-                    else:
-                        logger.warning(f"[获取失败] 未获取到 {code} 的实时行情")
-
-                    enriched_stocks.append(stock)
-
-                except Exception as e:
-                    logger.error(f"[获取错误] 处理 {stock.code} 时出错: {e}")
-                    # 继续处理下一只股票
-                    enriched_stocks.append(stock)
+            workers = min(self.enrich_workers, len(stocks))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                enriched_stocks = list(executor.map(self._enrich_single_stock, stocks))
 
             logger.info(f"[步骤] 成功丰富 {len(enriched_stocks)} 只股票的数据")
             return enriched_stocks
@@ -236,6 +230,38 @@ class HotStockFinder:
             logger.error(f"[步骤] 丰富股票数据失败: {e}")
             # 如果失败，返回原始股票列表
             return stocks
+
+    def _enrich_single_stock(self, stock: StockInfo) -> StockInfo:
+        """Fetch realtime quote and merge into StockInfo."""
+        try:
+            code = stock.code.replace('SH', '').replace('SZ', '')
+            logger.debug(f"[获取数据] 处理股票: {code} - {stock.name}")
+            quote = self.data_manager.get_realtime_quote(code)
+
+            if quote:
+                stock.price = quote.price or stock.price
+                stock.change_pct = quote.change_pct or stock.change_pct
+                stock.volume = quote.volume or stock.volume
+                stock.amount = quote.amount or stock.amount
+                stock.turnover_rate = quote.turnover_rate or stock.turnover_rate
+                stock.market_cap = quote.total_mv or stock.market_cap
+
+                debug_info = f"[更新数据] {code} {stock.name}: "
+                debug_info += f"价格={stock.price}, 涨跌={stock.change_pct}%, "
+                debug_info += f"成交量={stock.volume}, 成交额={stock.amount}, "
+                debug_info += f"换手率={stock.turnover_rate}%"
+
+                if stock.market_cap and stock.market_cap > 0:
+                    debug_info += f", 市值={stock.market_cap}"
+                logger.debug(debug_info)
+            else:
+                logger.warning(f"[获取失败] 未获取到 {code} 的实时行情")
+
+            return stock
+
+        except Exception as e:
+            logger.error(f"[获取错误] 处理 {stock.code} 时出错: {e}")
+            return stock
 
     def _fetch_top_gainers(self, limit: int = 100) -> Optional[pd.DataFrame]:
         """
@@ -394,7 +420,7 @@ class HotStockFinder:
         """
         获取人气榜前N只股票
 
-        使用 akshare 的 stock_hot_up_em() 获取人气榜数据。
+        使用 akshare 的 stock_hot_follow_xq() 获取雪球关注热榜数据。
 
         Args:
             limit: 获取数量，默认100
@@ -412,22 +438,17 @@ class HotStockFinder:
         try:
             import akshare as ak
 
-            logger.info(f"[API调用] ak.stock_hot_up_em() 获取人气榜...")
+            logger.info(f"[API调用] ak.stock_hot_follow_xq() 获取人气榜...")
 
             # 获取人气榜数据
-            df = ak.stock_hot_up_em()
+            df = ak.stock_hot_follow_xq()
 
             if df is None or df.empty:
                 logger.warning("[API返回] 人气榜数据为空")
                 return None
 
-            # 打印列名，了解数据结构
-            logger.info(f"[API返回] 人气榜数据列名: {list(df.columns)}")
-            # 打印前5行完整数据，了解数据格式
-            logger.info(f"[API返回] 人气榜前5行数据: {df.head(5).to_dict('records')}")
-
             # 取前N只
-            df = df.head(limit)
+            df = self._normalize_xq_hot_df(df).head(limit)
 
             logger.info(f"[API返回] 人气榜获取成功: 返回 {len(df)} 只股票")
 
@@ -444,7 +465,7 @@ class HotStockFinder:
         """
         获取飙升榜前N只股票
 
-        使用 akshare 的 stock_hot_up_em() 获取飙升榜数据。
+        使用 akshare 的 stock_hot_tweet_xq() 获取雪球讨论飙升榜数据。
 
         Args:
             limit: 获取数量，默认100
@@ -462,35 +483,19 @@ class HotStockFinder:
         try:
             import akshare as ak
 
-            logger.info(f"[API调用] ak.stock_hot_up_em() 获取飙升榜...")
+            logger.info(f"[API调用] ak.stock_hot_tweet_xq() 获取飙升榜...")
 
             # 获取飙升榜数据
-            # 注意：akshare 的 stock_hot_up_em() 函数可能只返回一个榜单
-            # 这里我们使用相同的接口，实际获取的可能是同一个榜单
-            df = ak.stock_hot_up_em()
+            df = ak.stock_hot_tweet_xq()
 
             if df is None or df.empty:
                 logger.warning("[API返回] 飙升榜数据为空")
                 return None
 
-            # 打印列名，了解数据结构
-            logger.debug(f"[API返回] 飙升榜数据列名: {list(df.columns)}")
-
             # 取前N只
-            df = df.head(limit)
+            df = self._normalize_xq_hot_df(df).head(limit)
 
             logger.info(f"[API返回] 飙升榜获取成功: 返回 {len(df)} 只股票")
-            # 安全地打印前5只股票
-            try:
-                # 尝试不同的列名组合
-                if '代码' in df.columns and '名称' in df.columns:
-                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5)[['代码', '名称']].to_dict('records')}")
-                elif '代码' in df.columns:
-                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5)[['代码']].to_dict('records')}")
-                else:
-                    logger.debug(f"[API返回] 飙升榜前5只: {df.head(5).to_dict('records')}")
-            except Exception as e:
-                logger.debug(f"[API返回] 打印前5只股票失败: {e}")
 
             # 更新缓存
             self._update_cache(cache_key, df)
@@ -500,6 +505,49 @@ class HotStockFinder:
         except Exception as e:
             logger.error(f"[API错误] 获取飙升榜失败: {e}", exc_info=True)
             return None
+
+    def _fetch_deal_ranking(self, limit: int = 100) -> Optional[pd.DataFrame]:
+        """Fetch Xueqiu deal hot ranking as an additional hot source."""
+        cache_key = f"deal_{limit}_{date.today()}"
+
+        if self._is_cache_valid(cache_key):
+            logger.info(f"[缓存命中] 使用缓存的讨论榜数据")
+            return self._cache[cache_key]
+
+        try:
+            import akshare as ak
+
+            logger.info(f"[API调用] ak.stock_hot_deal_xq() 获取讨论榜...")
+            df = ak.stock_hot_deal_xq()
+
+            if df is None or df.empty:
+                logger.warning("[API返回] 讨论榜数据为空")
+                return None
+
+            df = self._normalize_xq_hot_df(df).head(limit)
+            logger.info(f"[API返回] 讨论榜获取成功: 返回 {len(df)} 只股票")
+
+            self._update_cache(cache_key, df)
+            return df
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取讨论榜失败: {e}", exc_info=True)
+            return None
+
+    @staticmethod
+    def _normalize_xq_hot_df(df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize Xueqiu hot ranking fields to internal schema."""
+        if df is None or df.empty:
+            return df
+
+        rename_map = {
+            '股票代码': '代码',
+            '股票简称': '名称',
+            '最新价': '最新价',
+            '关注': '热度',
+        }
+        normalized = df.rename(columns=rename_map).copy()
+        return normalized
 
     def _row_to_stock_info(self, row: pd.Series) -> Optional[StockInfo]:
         """
@@ -551,8 +599,21 @@ class HotStockFinder:
             logger.debug(f"[API返回] 行数据: {row.to_dict()}")
 
             # 尝试不同的列名组合，确保能够从不同 API 响应中提取数据
-            code = str(row.get('代码', '') or row.get('证券代码', '') or row.get('code', '') or row.get('stock_code', ''))
-            name = str(row.get('股票名称', '') or row.get('名称', '') or row.get('证券名称', '') or row.get('name', '') or row.get('stock_name', ''))
+            code = str(
+                row.get('代码', '')
+                or row.get('股票代码', '')
+                or row.get('证券代码', '')
+                or row.get('code', '')
+                or row.get('stock_code', '')
+            )
+            name = str(
+                row.get('股票名称', '')
+                or row.get('股票简称', '')
+                or row.get('名称', '')
+                or row.get('证券名称', '')
+                or row.get('name', '')
+                or row.get('stock_name', '')
+            )
             price = safe_float(row.get('最新价') or row.get('price', '') or row.get('最新价(元)', '') or row.get('current_price', ''))
             change_pct = safe_float(row.get('涨跌幅') or row.get('涨跌幅(%)', '') or row.get('change_pct', '') or row.get('涨跌幅%', ''))
             volume = safe_float(row.get('成交量') or row.get('volume', '') or row.get('成交量(手)', '') or row.get('vol', ''))
