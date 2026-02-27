@@ -89,6 +89,7 @@ class HistoryService:
             items = []
             for record in records:
                 items.append({
+                    "id": record.id,
                     "query_id": record.query_id,
                     "stock_code": record.code,
                     "stock_name": record.name,
@@ -107,45 +108,39 @@ class HistoryService:
             logger.error(f"查询历史列表失败: {e}", exc_info=True)
             return {"total": 0, "items": []}
     
-    def get_history_detail(self, query_id: str) -> Optional[Dict[str, Any]]:
+    def get_history_detail_by_id(self, record_id: int) -> Optional[Dict[str, Any]]:
         """
         获取历史报告详情
-        
+
+        使用数据库主键精确查询，避免 query_id 在批量分析时重复导致返回错误记录。
+
         Args:
-            query_id: 分析记录唯一标识
-            
+            record_id: 分析历史记录主键 ID
+
         Returns:
             完整的分析报告字典，不存在返回 None
         """
         try:
-            # 查询数据库
-            records = self.db.get_analysis_history(query_id=query_id, limit=1)
-            
-            if not records:
+            record = self.db.get_analysis_history_by_id(record_id)
+            if not record:
                 return None
-            
-            record = records[0]
-            
-            # 解析 raw_result JSON
+
             raw_result = None
             if record.raw_result:
                 try:
                     raw_result = json.loads(record.raw_result)
                 except json.JSONDecodeError:
                     raw_result = record.raw_result
-            
-            # 解析 context_snapshot JSON
+
             context_snapshot = None
             if record.context_snapshot:
                 try:
                     context_snapshot = json.loads(record.context_snapshot)
                 except json.JSONDecodeError:
                     context_snapshot = record.context_snapshot
-            
-            # 计算情绪标签
-            sentiment_label = self._get_sentiment_label(record.sentiment_score or 50)
-            
+
             return {
+                "id": record.id,
                 "query_id": record.query_id,
                 "stock_code": record.code,
                 "stock_name": record.name,
@@ -155,7 +150,7 @@ class HistoryService:
                 "operation_advice": record.operation_advice,
                 "trend_prediction": record.trend_prediction,
                 "sentiment_score": record.sentiment_score,
-                "sentiment_label": sentiment_label,
+                "sentiment_label": self._get_sentiment_label(record.sentiment_score or 50),
                 "ideal_buy": str(record.ideal_buy) if record.ideal_buy else None,
                 "secondary_buy": str(record.secondary_buy) if record.secondary_buy else None,
                 "stop_loss": str(record.stop_loss) if record.stop_loss else None,
@@ -164,9 +159,8 @@ class HistoryService:
                 "raw_result": raw_result,
                 "context_snapshot": context_snapshot,
             }
-            
         except Exception as e:
-            logger.error(f"查询历史详情失败: {e}", exc_info=True)
+            logger.error(f"根据 ID 查询历史详情失败: {e}", exc_info=True)
             return None
 
     def get_news_intel(self, query_id: str, limit: int = 20) -> List[Dict[str, str]]:
@@ -201,6 +195,33 @@ class HistoryService:
 
         except Exception as e:
             logger.error(f"查询新闻情报失败: {e}", exc_info=True)
+            return []
+
+    def get_news_intel_by_record_id(self, record_id: int, limit: int = 20) -> List[Dict[str, str]]:
+        """
+        根据分析历史记录 ID 获取关联的新闻情报
+
+        将 record_id 解析为 query_id，再调用 get_news_intel。
+
+        Args:
+            record_id: 分析历史记录主键 ID
+            limit: 返回数量限制
+
+        Returns:
+            新闻情报列表（包含 title、snippet、url）
+        """
+        try:
+            # 根据 record_id 查出对应的 AnalysisHistory 记录
+            record = self.db.get_analysis_history_by_id(record_id)
+            if not record:
+                logger.warning(f"未找到 record_id={record_id} 的分析记录")
+                return []
+
+            # 从记录中获取 query_id，然后调用原方法
+            return self.get_news_intel(query_id=record.query_id, limit=limit)
+
+        except Exception as e:
+            logger.error(f"根据 record_id 查询新闻情报失败: {e}", exc_info=True)
             return []
 
     def _fallback_news_by_analysis_context(self, query_id: str, limit: int) -> List[Any]:

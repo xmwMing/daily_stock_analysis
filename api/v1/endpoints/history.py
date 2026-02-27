@@ -84,6 +84,7 @@ def get_history_list(
         # 转换为响应模型
         items = [
             HistoryItem(
+                id=item.get("id"),
                 query_id=item.get("query_id", ""),
                 stock_code=item.get("stock_code", ""),
                 stock_name=item.get("stock_name"),
@@ -114,7 +115,7 @@ def get_history_list(
 
 
 @router.get(
-    "/{query_id}",
+    "/{record_id}",
     response_model=AnalysisReport,
     responses={
         200: {"description": "报告详情"},
@@ -122,19 +123,20 @@ def get_history_list(
         500: {"description": "服务器错误", "model": ErrorResponse},
     },
     summary="获取历史报告详情",
-    description="根据 query_id 获取完整的历史分析报告"
+    description="根据分析历史记录 ID 获取完整的历史分析报告"
 )
 def get_history_detail(
-    query_id: str,
+    record_id: int,
     db_manager: DatabaseManager = Depends(get_database_manager)
 ) -> AnalysisReport:
     """
     获取历史报告详情
     
-    根据 query_id 获取完整的历史分析报告
+    根据分析历史记录主键 ID 获取完整的历史分析报告。
+    使用 ID 而非 query_id，因为 query_id 在批量分析时可能重复。
     
     Args:
-        query_id: 分析记录唯一标识
+        record_id: 分析历史记录主键 ID
         db_manager: 数据库管理器依赖
         
     Returns:
@@ -147,14 +149,14 @@ def get_history_detail(
         service = HistoryService(db_manager)
         
         # 使用 def 而非 async def，FastAPI 自动在线程池中执行
-        result = service.get_history_detail(query_id)
+        result = service.get_history_detail_by_id(record_id)
         
         if result is None:
             raise HTTPException(
                 status_code=404,
                 detail={
                     "error": "not_found",
-                    "message": f"未找到 query_id={query_id} 的分析记录"
+                    "message": f"未找到 id={record_id} 的分析记录"
                 }
             )
         
@@ -177,7 +179,8 @@ def get_history_detail(
         
         # 构建响应模型
         meta = ReportMeta(
-            query_id=result.get("query_id", query_id),
+            id=result.get("id"),
+            query_id=result.get("query_id", ""),
             stock_code=result.get("stock_code", ""),
             stock_name=result.get("stock_name"),
             report_type=result.get("report_type"),
@@ -228,25 +231,28 @@ def get_history_detail(
 
 
 @router.get(
-    "/{query_id}/news",
+    "/{record_id}/news",
     response_model=NewsIntelResponse,
     responses={
         200: {"description": "新闻情报列表"},
         500: {"description": "服务器错误", "model": ErrorResponse},
     },
     summary="获取历史报告关联新闻",
-    description="根据 query_id 获取关联的新闻情报列表（为空也返回 200）"
+    description="根据分析历史记录 ID 获取关联的新闻情报列表（为空也返回 200）"
 )
 def get_history_news(
-    query_id: str,
+    record_id: int,
     limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
     db_manager: DatabaseManager = Depends(get_database_manager)
 ) -> NewsIntelResponse:
     """
     获取历史报告关联新闻
 
+    根据分析历史记录 ID 获取关联的新闻情报列表。
+    在内部完成 record_id → query_id 的解析。
+
     Args:
-        query_id: 分析记录唯一标识
+        record_id: 分析历史记录主键 ID
         limit: 返回数量限制
         db_manager: 数据库管理器依赖
 
@@ -255,7 +261,7 @@ def get_history_news(
     """
     try:
         service = HistoryService(db_manager)
-        items = service.get_news_intel(query_id=query_id, limit=limit)
+        items = service.get_news_intel_by_record_id(record_id=record_id, limit=limit)
 
         response_items = [
             NewsIntelItem(

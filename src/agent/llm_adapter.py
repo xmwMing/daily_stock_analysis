@@ -28,6 +28,7 @@ class ToolCall:
     id: str
     name: str
     arguments: Dict[str, Any]
+    thought_signature: Optional[str] = None
 
 
 @dataclass
@@ -35,9 +36,57 @@ class LLMResponse:
     """Normalized response from any LLM provider."""
     content: Optional[str] = None          # text response (final answer)
     tool_calls: List[ToolCall] = field(default_factory=list)  # tool calls to execute
+    reasoning_content: Optional[str] = None  # Chain-of-thought (CoT) from DeepSeek thinking mode; must be passed back in multi-turn assistant messages; None for other providers
     usage: Dict[str, Any] = field(default_factory=dict)       # token usage info
     provider: str = ""                     # which provider handled this call
     raw: Any = None                        # raw provider response for debugging
+
+
+# Models that auto-return reasoning_content; do NOT send extra_body (may cause 400).
+_AUTO_THINKING_MODELS: List[str] = ["deepseek-reasoner", "deepseek-r1", "qwq"]
+
+# Models that need explicit opt-in via extra_body; payload decoupled from model name.
+_OPT_IN_THINKING_MODELS: Dict[str, dict] = {
+    "deepseek-chat": {"thinking": {"type": "enabled"}},
+}
+
+
+def _model_matches(model: str, entries: List[str]) -> bool:
+    """Check if model name matches any entry (exact or prefix with version suffix)."""
+    if not model:
+        return False
+    m = model.lower().strip()
+    for e in entries:
+        if m == e or m.startswith(e + "-"):
+            return True
+    return False
+
+
+def _get_opt_in_payload(model: str, opt_in: Dict[str, dict]) -> Optional[dict]:
+    """Return extra_body payload for opt-in thinking models, or None."""
+    if not model:
+        return None
+    m = model.lower().strip()
+    for key, payload in opt_in.items():
+        if m == key or m.startswith(key + "-"):
+            return payload
+    return None
+
+
+def get_thinking_extra_body(model: str) -> Optional[dict]:
+    """Return extra_body for thinking mode, or None.
+
+    - Auto-thinking models (_AUTO_THINKING_MODELS: deepseek-reasoner, deepseek-r1, qwq):
+      These models automatically return reasoning_content in API responses; sending
+      extra_body would cause 400 because the API already enables thinking by default.
+      Return None to avoid duplicate activation.
+    - Opt-in models (_OPT_IN_THINKING_MODELS: deepseek-chat): Return the activation
+      payload to explicitly enable thinking mode.
+    - All other models: Return None (no thinking mode).
+    """
+    if _model_matches(model, _AUTO_THINKING_MODELS):
+        return None
+    return _get_opt_in_payload(model, _OPT_IN_THINKING_MODELS)
 
 
 # ============================================================
@@ -101,7 +150,7 @@ class LLMToolAdapter:
 
         # OpenAI
         openai_key = config.openai_api_key
-        if openai_key and not openai_key.startswith("your_") and len(openai_key) > 10:
+        if openai_key and not openai_key.startswith("your_") and len(openai_key) >= 8:
             try:
                 from openai import OpenAI
                 client_kwargs = {"api_key": openai_key}
@@ -333,30 +382,41 @@ class LLMToolAdapter:
                 # Reconstruct assistant message with tool_calls
                 openai_tc = []
                 for tc in msg["tool_calls"]:
-                    openai_tc.append({
+                    tc_dict = {
                         "id": tc.get("id", str(uuid.uuid4())[:8]),
                         "type": "function",
                         "function": {
                             "name": tc["name"],
                             "arguments": json.dumps(tc["arguments"]),
                         }
-                    })
-                openai_messages.append({
+                    }
+                    sig = tc.get("thought_signature")
+                    if sig is not None:
+                        tc_dict["provider_specific_fields"] = {"thought_signature": sig}
+                    openai_tc.append(tc_dict)
+                openai_msg = {
                     "role": "assistant",
                     "content": msg.get("content"),
                     "tool_calls": openai_tc,
-                })
+                }
+                if msg.get("reasoning_content") is not None:
+                    openai_msg["reasoning_content"] = msg["reasoning_content"]
+                openai_messages.append(openai_msg)
             else:
                 openai_messages.append({
                     "role": msg["role"],
                     "content": msg["content"],
                 })
 
+        model_name = config.openai_model or "gpt-4o-mini"
         call_kwargs = {
-            "model": config.openai_model or "gpt-4o-mini",
+            "model": model_name,
             "messages": openai_messages,
             "temperature": config.openai_temperature,
         }
+        payload = get_thinking_extra_body(model_name)
+        if payload:
+            call_kwargs["extra_body"] = payload
         if tools:
             call_kwargs["tools"] = tools
 
@@ -366,6 +426,8 @@ class LLMToolAdapter:
         choice = response.choices[0]
         tool_calls = []
         text_content = choice.message.content
+        # DeepSeek-specific extension field; not in openai SDK type, accessed via getattr for safety
+        reasoning_content = getattr(choice.message, 'reasoning_content', None)
 
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
@@ -375,10 +437,21 @@ class LLMToolAdapter:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
                         args = {"raw": tc.function.arguments}
+                # Extract thought_signature: stored in __pydantic_extra__ as provider_specific_fields
+                psf = getattr(tc, 'provider_specific_fields', None)
+                if psf is not None:
+                    sig = psf.get('thought_signature') if isinstance(psf, dict) else getattr(psf, 'thought_signature', None)
+                else:
+                    func_psf = getattr(tc.function, 'provider_specific_fields', None)
+                    if func_psf is not None:
+                        sig = func_psf.get('thought_signature') if isinstance(func_psf, dict) else getattr(func_psf, 'thought_signature', None)
+                    else:
+                        sig = getattr(tc, 'thought_signature', None)
                 tool_calls.append(ToolCall(
                     id=tc.id,
                     name=tc.function.name,
                     arguments=args,
+                    thought_signature=sig,
                 ))
 
         usage = {}
@@ -392,6 +465,7 @@ class LLMToolAdapter:
         return LLMResponse(
             content=text_content,
             tool_calls=tool_calls,
+            reasoning_content=reasoning_content,
             usage=usage,
             provider="openai",
             raw=response,

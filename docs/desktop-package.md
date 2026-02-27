@@ -57,6 +57,26 @@ powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1
 3. PyInstaller 打包后端
 4. electron-builder 打包桌面应用
 
+## GitHub CI 自动打包并发布 Release
+
+仓库已支持通过 GitHub Actions 自动构建桌面端并上传到 GitHub Releases：
+
+- 工作流：`.github/workflows/desktop-release.yml`
+- 触发方式：
+  - 推送语义化 tag（如 `v3.2.12`）后自动触发
+  - 在 Actions 页面手动触发并指定 `release_tag`
+- 产物：
+  - Windows 安装包：`daily-stock-analysis-windows-installer-<tag>.exe`
+  - Windows 免安装包：`daily-stock-analysis-windows-noinstall-<tag>.zip`
+  - macOS Intel：`daily-stock-analysis-macos-x64-<tag>.dmg`
+  - macOS Apple Silicon：`daily-stock-analysis-macos-arm64-<tag>.dmg`
+
+建议发布流程：
+
+1. 合并代码到 `main`
+2. 由自动打 tag 工作流生成版本（或手动创建 tag）
+3. `desktop-release` 工作流自动构建并把两个平台安装包附加到对应 GitHub Release
+
 ### 分步打包
 
 1) 构建 React UI
@@ -72,7 +92,7 @@ npm run build
 ```bash
 pip install pyinstaller
 pip install -r requirements.txt
-pyinstaller --name stock_analysis --onefile --noconsole --add-data "static;static" main.py
+python -m PyInstaller --name stock_analysis --onefile --noconsole --add-data "static;static" --hidden-import=multipart --hidden-import=multipart.multipart main.py
 ```
 
 将生成的 exe 复制到 `dist/backend/`：

@@ -20,7 +20,8 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 }) => {
   // 兼容 AnalysisResult 和 AnalysisReport 两种数据格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
-  const queryId = 'queryId' in data ? data.queryId : report.meta.queryId;
+  // 使用 report id，因为 queryId 在批量分析时可能重复，且历史报告详情接口需要 recordId 来获取关联资讯和详情数据
+  const recordId = report.meta.id;
 
   const { meta, summary, strategy, details } = report;
 
@@ -37,10 +38,10 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
       <ReportStrategy strategy={strategy} />
 
       {/* 资讯区 */}
-      <ReportNews queryId={queryId} />
+      <ReportNews recordId={recordId} />
 
       {/* 透明度与追溯区 */}
-      <ReportDetails details={details} queryId={queryId} />
+      <ReportDetails details={details} recordId={recordId} />
     </div>
   );
 };

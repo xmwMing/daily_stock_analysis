@@ -292,7 +292,7 @@ class TavilySearchProvider(BaseSearchProvider):
             parsed = urlparse(url)
             domain = parsed.netloc.replace('www.', '')
             return domain or '未知来源'
-        except:
+        except Exception:
             return '未知来源'
 
 
@@ -496,7 +496,7 @@ class SerpAPISearchProvider(BaseSearchProvider):
             from urllib.parse import urlparse
             parsed = urlparse(url)
             return parsed.netloc.replace('www.', '') or '未知来源'
-        except:
+        except Exception:
             return '未知来源'
 
 
@@ -570,7 +570,7 @@ class BochaSearchProvider(BaseSearchProvider):
                         error_message = error_data.get('message', response.text)
                     else:
                         error_message = response.text
-                except:
+                except Exception:
                     error_message = response.text
                 
                 # 根据错误码处理
@@ -693,7 +693,7 @@ class BochaSearchProvider(BaseSearchProvider):
             parsed = urlparse(url)
             domain = parsed.netloc.replace('www.', '')
             return domain or '未知来源'
-        except:
+        except Exception:
             return '未知来源'
 
 
@@ -858,7 +858,7 @@ class BraveSearchProvider(BaseSearchProvider):
                     return error_data['error']
                 return str(error_data)
             return response.text[:200]
-        except:
+        except Exception:
             return f"HTTP {response.status_code}: {response.text[:200]}"
 
     @staticmethod
@@ -869,7 +869,7 @@ class BraveSearchProvider(BaseSearchProvider):
             parsed = urlparse(url)
             domain = parsed.netloc.replace('www.', '')
             return domain or '未知来源'
-        except:
+        except Exception:
             return '未知来源'
 
 

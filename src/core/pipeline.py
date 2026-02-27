@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 
+import pandas as pd
+
 from src.config import get_config, Config
 from src.storage import get_db
 from data_provider import DataFetcherManager
@@ -28,6 +30,7 @@ from src.notification import NotificationService, NotificationChannel
 from src.search_service import SearchService
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
+from src.core.trading_calendar import get_market_for_stock, is_market_open
 from bot.models import BotMessage
 
 
@@ -223,12 +226,14 @@ class StockAnalysisPipeline:
             # Step 3: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
             try:
-                import pandas as pd
                 end_date = date.today()
                 start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                    # Issue #234: Augment with realtime for intraday MA calculation
+                    if self.config.enable_realtime_quote and realtime_quote:
+                        df = self._augment_historical_with_realtime(df, realtime_quote, code)
                     trend_result = self.trend_analyzer.analyze(df, code)
                     logger.info(f"[{code}] 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
@@ -412,6 +417,69 @@ class StockAnalysisPipeline:
                 'risk_factors': trend_result.risk_factors,
             }
 
+        # Issue #234: Override today with realtime OHLC + trend MA for intraday analysis
+        # Guard: trend_result.ma5 > 0 ensures MA calculation succeeded (data sufficient)
+        if realtime_quote and trend_result and trend_result.ma5 > 0:
+            price = getattr(realtime_quote, 'price', None)
+            if price is not None and price > 0:
+                yesterday_close = None
+                if enhanced.get('yesterday') and isinstance(enhanced['yesterday'], dict):
+                    yesterday_close = enhanced['yesterday'].get('close')
+                orig_today = enhanced.get('today') or {}
+                open_p = getattr(realtime_quote, 'open_price', None) or getattr(
+                    realtime_quote, 'pre_close', None
+                ) or yesterday_close or orig_today.get('open') or price
+                high_p = getattr(realtime_quote, 'high', None) or price
+                low_p = getattr(realtime_quote, 'low', None) or price
+                vol = getattr(realtime_quote, 'volume', None)
+                amt = getattr(realtime_quote, 'amount', None)
+                pct = getattr(realtime_quote, 'change_pct', None)
+                realtime_today = {
+                    'close': price,
+                    'open': open_p,
+                    'high': high_p,
+                    'low': low_p,
+                    'ma5': trend_result.ma5,
+                    'ma10': trend_result.ma10,
+                    'ma20': trend_result.ma20,
+                }
+                if vol is not None:
+                    realtime_today['volume'] = vol
+                if amt is not None:
+                    realtime_today['amount'] = amt
+                if pct is not None:
+                    realtime_today['pct_chg'] = pct
+                for k, v in orig_today.items():
+                    if k not in realtime_today and v is not None:
+                        realtime_today[k] = v
+                enhanced['today'] = realtime_today
+                enhanced['ma_status'] = self._compute_ma_status(
+                    price, trend_result.ma5, trend_result.ma10, trend_result.ma20
+                )
+                enhanced['date'] = date.today().isoformat()
+                if yesterday_close is not None:
+                    try:
+                        yc = float(yesterday_close)
+                        if yc > 0:
+                            enhanced['price_change_ratio'] = round(
+                                (price - yc) / yc * 100, 2
+                            )
+                    except (TypeError, ValueError):
+                        pass
+                if vol is not None and enhanced.get('yesterday'):
+                    yest_vol = enhanced['yesterday'].get('volume') if isinstance(
+                        enhanced['yesterday'], dict
+                    ) else None
+                    if yest_vol is not None:
+                        try:
+                            yv = float(yest_vol)
+                            if yv > 0:
+                                enhanced['volume_change_ratio'] = round(
+                                    float(vol) / yv, 2
+                                )
+                        except (TypeError, ValueError):
+                            pass
+
         # ETF/index flag for analyzer prompt (Fixes #274)
         enhanced['is_index_etf'] = SearchService.is_index_or_etf(
             context.get('code', ''), enhanced.get('stock_name', stock_name)
@@ -455,6 +523,29 @@ class StockAnalysisPipeline:
 
             # 转换为 AnalysisResult
             result = self._agent_result_to_analysis_result(agent_result, code, stock_name, report_type, query_id)
+
+            # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
+            # 使用 search_stock_news（与 Agent 工具调用逻辑一致），仅 1 次 API 调用，无额外延迟
+            if self.search_service.is_available:
+                try:
+                    news_response = self.search_service.search_stock_news(
+                        stock_code=code,
+                        stock_name=stock_name,
+                        max_results=5
+                    )
+                    if news_response.success and news_response.results:
+                        query_context = self._build_query_context(query_id=query_id)
+                        self.db.save_news_intel(
+                            code=code,
+                            name=stock_name,
+                            dimension="latest_news",
+                            query=news_response.query,
+                            response=news_response,
+                            query_context=query_context
+                        )
+                        logger.info(f"[{code}] Agent 模式: 新闻情报已保存 {len(news_response.results)} 条")
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent 模式保存新闻情报失败: {e}")
 
             # 保存分析历史记录
             if result:
@@ -548,6 +639,101 @@ class StockAnalysisPipeline:
             return "明显放量"
         else:
             return "巨量"
+
+    @staticmethod
+    def _compute_ma_status(close: float, ma5: float, ma10: float, ma20: float) -> str:
+        """
+        Compute MA alignment status from price and MA values.
+        Logic mirrors storage._analyze_ma_status (Issue #234).
+        """
+        close = close or 0
+        ma5 = ma5 or 0
+        ma10 = ma10 or 0
+        ma20 = ma20 or 0
+        if close > ma5 > ma10 > ma20 > 0:
+            return "多头排列 📈"
+        elif close < ma5 < ma10 < ma20 and ma20 > 0:
+            return "空头排列 📉"
+        elif close > ma5 and ma5 > ma10:
+            return "短期向好 🔼"
+        elif close < ma5 and ma5 < ma10:
+            return "短期走弱 🔽"
+        else:
+            return "震荡整理 ↔️"
+
+    def _augment_historical_with_realtime(
+        self, df: pd.DataFrame, realtime_quote: Any, code: str
+    ) -> pd.DataFrame:
+        """
+        Augment historical OHLCV with today's realtime quote for intraday MA calculation.
+        Issue #234: Use realtime price instead of yesterday's close for technical indicators.
+        """
+        if df is None or df.empty or 'close' not in df.columns:
+            return df
+        if realtime_quote is None:
+            return df
+        price = getattr(realtime_quote, 'price', None)
+        if price is None or not (isinstance(price, (int, float)) and price > 0):
+            return df
+
+        # Optional: skip augmentation on non-trading days (fail-open)
+        enable_realtime_tech = getattr(
+            self.config, 'enable_realtime_technical_indicators', True
+        )
+        if not enable_realtime_tech:
+            return df
+        market = get_market_for_stock(code)
+        if market and not is_market_open(market, date.today()):
+            return df
+
+        last_val = df['date'].max()
+        last_date = (
+            last_val.date() if hasattr(last_val, 'date') else
+            (last_val if isinstance(last_val, date) else pd.Timestamp(last_val).date())
+        )
+        yesterday_close = float(df.iloc[-1]['close']) if len(df) > 0 else price
+        open_p = getattr(realtime_quote, 'open_price', None) or getattr(
+            realtime_quote, 'pre_close', None
+        ) or yesterday_close
+        high_p = getattr(realtime_quote, 'high', None) or price
+        low_p = getattr(realtime_quote, 'low', None) or price
+        vol = getattr(realtime_quote, 'volume', None) or 0
+        amt = getattr(realtime_quote, 'amount', None)
+        pct = getattr(realtime_quote, 'change_pct', None)
+
+        if last_date >= date.today():
+            # Update last row with realtime close (copy to avoid mutating caller's df)
+            df = df.copy()
+            idx = df.index[-1]
+            df.loc[idx, 'close'] = price
+            if open_p is not None:
+                df.loc[idx, 'open'] = open_p
+            if high_p is not None:
+                df.loc[idx, 'high'] = high_p
+            if low_p is not None:
+                df.loc[idx, 'low'] = low_p
+            if vol:
+                df.loc[idx, 'volume'] = vol
+            if amt is not None:
+                df.loc[idx, 'amount'] = amt
+            if pct is not None:
+                df.loc[idx, 'pct_chg'] = pct
+        else:
+            # Append virtual today row
+            new_row = {
+                'code': code,
+                'date': date.today(),
+                'open': open_p,
+                'high': high_p,
+                'low': low_p,
+                'close': price,
+                'volume': vol,
+                'amount': amt if amt is not None else 0,
+                'pct_chg': pct if pct is not None else 0,
+            }
+            new_df = pd.DataFrame([new_row])
+            df = pd.concat([df, new_df], ignore_index=True)
+        return df
 
     def _build_context_snapshot(
         self,

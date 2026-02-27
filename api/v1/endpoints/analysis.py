@@ -440,6 +440,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
             # Build report from DB record so completed tasks return real data
             report_dict = AnalysisReport(
                 meta=ReportMeta(
+                    id=record.id,
                     query_id=task_id,
                     stock_code=record.code,
                     stock_name=record.name,

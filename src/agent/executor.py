@@ -416,10 +416,12 @@ class AgentExecutor:
 
         messages.append({"role": "user", "content": message})
 
+        # Persist the user turn immediately so the session appears in history during processing
+        conversation_manager.add_message(session_id, "user", message)
+
         result = self._run_loop(messages, tool_decls, start_time, tool_calls_log, total_tokens, parse_dashboard=False, progress_callback=progress_callback)
 
-        # Always persist the user turn; persist assistant reply (or error note) for context continuity
-        conversation_manager.add_message(session_id, "user", message)
+        # Persist assistant reply (or error note) for context continuity
         if result.success:
             conversation_manager.add_message(session_id, "assistant", result.content)
         else:
@@ -457,10 +459,18 @@ class AgentExecutor:
                     "role": "assistant",
                     "content": response.content,
                     "tool_calls": [
-                        {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                        {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                            **({"thought_signature": tc.thought_signature} if tc.thought_signature is not None else {}),
+                        }
                         for tc in response.tool_calls
                     ],
                 }
+                # Only present for DeepSeek thinking mode; None for all other providers
+                if response.reasoning_content is not None:
+                    assistant_msg["reasoning_content"] = response.reasoning_content
                 messages.append(assistant_msg)
 
                 # Execute tool calls — parallel when multiple, sequential when single

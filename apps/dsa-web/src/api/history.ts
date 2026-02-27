@@ -44,20 +44,20 @@ export const historyApi = {
 
   /**
    * 获取历史报告详情
-   * @param queryId 分析记录唯一标识
+   * @param recordId 分析历史记录主键 ID（使用 ID 而非 query_id，因为 query_id 在批量分析时可能重复）
    */
-  getDetail: async (queryId: string): Promise<AnalysisReport> => {
-    const response = await apiClient.get<Record<string, unknown>>(`/api/v1/history/${queryId}`);
+  getDetail: async (recordId: number): Promise<AnalysisReport> => {
+    const response = await apiClient.get<Record<string, unknown>>(`/api/v1/history/${recordId}`);
     return toCamelCase<AnalysisReport>(response.data);
   },
 
   /**
    * 获取历史报告关联新闻
-   * @param queryId 分析记录唯一标识
+   * @param recordId 分析历史记录主键 ID
    * @param limit 返回数量限制
    */
-  getNews: async (queryId: string, limit = 20): Promise<NewsIntelResponse> => {
-    const response = await apiClient.get<Record<string, unknown>>(`/api/v1/history/${queryId}/news`, {
+  getNews: async (recordId: number, limit = 20): Promise<NewsIntelResponse> => {
+    const response = await apiClient.get<Record<string, unknown>>(`/api/v1/history/${recordId}/news`, {
       params: { limit },
     });
 

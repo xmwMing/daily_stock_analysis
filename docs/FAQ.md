@@ -185,6 +185,7 @@ PROXY_PORT=10809
 OPENAI_API_KEY=sk-xxxxxxxx
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-chat
+# 思考模式：deepseek-reasoner、deepseek-r1、qwq 等自动识别；deepseek-chat 系统按模型名自动启用
 ```
 
 支持的模型服务：
@@ -222,6 +223,29 @@ OPENAI_MODEL=deepseek-chat
 
 ---
 
+### Q14.1: Docker 中网络/DNS 解析失败（如 api.tushare.pro、searchapi.eastmoney.com 无法解析）？
+
+**现象**：日志显示 `Temporary failure in name resolution` 或 `NameResolutionError`，股票数据 API 和大模型 API 均无法访问。
+
+**原因**：自定义 bridge 网络下，容器使用 Docker 内置 DNS，在旁路由、特定网络环境时可能解析失败。
+
+**解决方案**（按优先级尝试）：
+
+1. **显式配置 DNS**：在 `docker/docker-compose.yml` 的 `x-common` 下添加：
+   ```yaml
+   dns:
+     - 223.5.5.5
+     - 119.29.29.29
+     - 8.8.8.8
+   ```
+   然后执行 `docker-compose down` 和 `docker-compose up -d --force-recreate` 重新创建容器。
+
+2. **改用 host 网络模式**：若上述仍无效，可在 `server` 服务下添加 `network_mode: host`，并移除 `ports` 映射。使用 host 模式时，`ports` 无效，**端口由 `command` 中的 `--port` 指定**。若宿主机默认端口已占用，可修改为其他端口（如 `.env` 中设置 `API_PORT=8080`），访问对应 `http://localhost:8080`。
+
+> 📌 相关 Issue: [#372](https://github.com/ZhuLinsen/daily_stock_analysis/issues/372)
+
+---
+
 ## 🔧 其他问题
 
 ### Q15: 如何只运行大盘复盘，不分析个股？
@@ -254,4 +278,4 @@ python main.py --market-only
 
 ---
 
-*最后更新：2026-02-01*
+*最后更新：2026-02-23*

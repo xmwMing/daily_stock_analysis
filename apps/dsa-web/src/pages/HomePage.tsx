@@ -92,20 +92,33 @@ const HomePage: React.FC = () => {
   });
 
 // 加载历史列表
-  const fetchHistory = useCallback(async (autoSelectFirst = false, reset = true) => {
-    if (reset) {
-      setIsLoadingHistory(true);
+  const fetchHistory = useCallback(async (autoSelectFirst = false, reset = true, silent = false) => {
+    if (!silent) {
+      if (reset) {
+        setIsLoadingHistory(true);
+        setCurrentPage(1);
+      } else {
+        setIsLoadingMore(true);
+      }
+    } else if (reset) {
+      // Silent reset still needs page reset for correct API call
       setCurrentPage(1);
-    } else {
-      setIsLoadingMore(true);
     }
 
     const page = reset ? 1 : currentPage + 1;
 
     try {
+      // TODO: Proper timezone handling needed
+      // Using tomorrow as endDate is a temporary workaround to include today's records.
+      // This may incorrectly include tomorrow's data and is semantically inconsistent across timezones.
+      // Better solution: standardize backend & frontend to use UTC or fixed timezone (Asia/Shanghai),
+      // or construct endDate on frontend as end-of-day timestamp.
+      const tomorrowDate = new Date();
+      tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+      
       const response = await historyApi.getList({
         startDate: getRecentStartDate(30),
-        endDate: toDateInputValue(new Date()),
+        endDate: toDateInputValue(tomorrowDate),
         page,
         limit: pageSize,
       });
@@ -126,7 +139,7 @@ const HomePage: React.FC = () => {
         const firstItem = response.items[0];
         setIsLoadingReport(true);
         try {
-          const report = await historyApi.getDetail(firstItem.queryId);
+          const report = await historyApi.getDetail(firstItem.id);
           setSelectedReport(report);
         } catch (err) {
           console.error('Failed to fetch first report:', err);
@@ -154,14 +167,33 @@ const HomePage: React.FC = () => {
     fetchHistory(true);
   }, [fetchHistory]);
 
+  // Background polling: re-fetch history every 30s for CLI-initiated analyses
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchHistory(false, true, true);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchHistory]);
+
+  // Refresh when tab regains visibility (e.g. user ran main.py in another terminal)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchHistory(false, true, true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [fetchHistory]);
+
   // 点击历史项加载报告
-  const handleHistoryClick = async (queryId: string) => {
+  const handleHistoryClick = async (recordId: number) => {
     // 取消当前分析请求的结果显示（通过递增 requestId）
     analysisRequestIdRef.current += 1;
 
     setIsLoadingReport(true);
     try {
-      const report = await historyApi.getDetail(queryId);
+      const report = await historyApi.getDetail(recordId);
       setSelectedReport(report);
     } catch (err) {
       console.error('Failed to fetch report:', err);
@@ -285,7 +317,7 @@ const HomePage: React.FC = () => {
           isLoading={isLoadingHistory}
           isLoadingMore={isLoadingMore}
           hasMore={hasMore}
-          selectedQueryId={selectedReport?.meta.queryId}
+          selectedId={selectedReport?.meta.id}
           onItemClick={handleHistoryClick}
           onLoadMore={handleLoadMore}
           className="max-h-[62vh] overflow-hidden"
@@ -304,13 +336,14 @@ const HomePage: React.FC = () => {
             {/* Follow-up button */}
             <div className="flex items-center justify-end mb-2">
               <button
+                disabled={selectedReport.meta.id === undefined}
                 onClick={() => {
                   const code = selectedReport.meta.stockCode;
                   const name = selectedReport.meta.stockName;
-                  const qid = selectedReport.meta.queryId;
-                  navigate(`/chat?stock=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}&queryId=${encodeURIComponent(qid)}`);
+                  const rid = selectedReport.meta.id!;
+                  navigate(`/chat?stock=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}&recordId=${rid}`);
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan/10 border border-cyan/20 text-cyan text-sm hover:bg-cyan/20 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan/10 border border-cyan/20 text-cyan text-sm hover:bg-cyan/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />

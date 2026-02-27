@@ -5,7 +5,7 @@ import { Card } from '../common';
 
 interface ReportDetailsProps {
   details?: ReportDetailsType;
-  queryId?: string;
+  recordId?: number;  // 分析历史记录主键 ID
 }
 
 /**
@@ -13,13 +13,13 @@ interface ReportDetailsProps {
  */
 export const ReportDetails: React.FC<ReportDetailsProps> = ({
   details,
-  queryId,
+  recordId,
 }) => {
   const [showRaw, setShowRaw] = useState(false);
   const [showSnapshot, setShowSnapshot] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  if (!details?.rawResult && !details?.contextSnapshot && !queryId) {
+  if (!details?.rawResult && !details?.contextSnapshot && !recordId) {
     return null;
   }
 
@@ -58,12 +58,12 @@ export const ReportDetails: React.FC<ReportDetailsProps> = ({
         <h3 className="text-base font-semibold text-white mt-0.5">数据追溯</h3>
       </div>
 
-      {/* Query ID */}
-      {queryId && (
+      {/* Record ID */}
+      {recordId && (
         <div className="flex items-center gap-2 text-xs text-muted mb-3 pb-3 border-b border-white/5">
-          <span>Query ID:</span>
+          <span>Record ID:</span>
           <code className="font-mono text-xs text-cyan bg-cyan/10 px-1.5 py-0.5 rounded">
-            {queryId}
+            {recordId}
           </code>
         </div>
       )}
