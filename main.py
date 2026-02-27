@@ -726,20 +726,31 @@ def main() -> int:
                             stocks_only_report = pipeline.notifier.generate_dashboard_report(stocks_only_results)
 
                     # Step 3: 生成最终报告（保持 stocks-only 格式，仅增加“热门股票推荐”字样）
+                    finder_stats = hot_recommender.finder.stats or {}
+                    hot_summary = (
+                        "# 🔥 热门股票推荐\n\n"
+                        "## 📈 热门榜单统计\n\n"
+                        f"- 飙升榜获取: {finder_stats.get('gainers_count', 0)} 只\n"
+                        f"- 人气榜获取: {finder_stats.get('turnover_count', 0)} 只\n"
+                        f"- 讨论榜获取: {finder_stats.get('deal_count', finder_stats.get('volume_count', 0))} 只\n"
+                        f"- 过滤后剩余: {finder_stats.get('total_after_filter', 0)} 只\n"
+                    )
+
                     if top_stock_codes and stocks_only_report:
                         final_report = stocks_only_report
                         if "个股决策仪表盘" in final_report:
                             final_report = final_report.replace("个股决策仪表盘", "热门股票推荐个股决策仪表盘", 1)
                         else:
                             final_report = f"# 🔥 热门股票推荐\n\n{final_report}"
+                        final_report = f"{hot_summary}\n\n---\n\n{final_report}"
                     elif top_stock_codes:
                         final_report = (
-                            "# 🔥 热门股票推荐\n\n"
+                            f"{hot_summary}\n\n"
                             "本轮已选出热门股票，但 stocks-only 二次分析未生成有效结果，请稍后重试。"
                         )
                     else:
                         final_report = (
-                            "# 🔥 热门股票推荐\n\n"
+                            f"{hot_summary}\n\n"
                             "本轮热门推荐为空，未触发 stocks-only 二次分析。"
                         )
 

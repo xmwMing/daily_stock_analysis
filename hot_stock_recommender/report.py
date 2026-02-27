@@ -51,7 +51,7 @@ class RecommendationReport:
             f"> 共推荐 **{len(recommendations)}** 只热门股票",
             "",
         ]
-        
+
         # 添加股票列表
         if recommendations:
             stock_list_lines = ["> 推荐股票列表:"]
@@ -70,7 +70,7 @@ class RecommendationReport:
                 "|--------|------|",
                 f"| 飙升榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
                 f"| 人气榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
-                f"| 合并去重后 | {finder_stats.get('total_before_filter', 0)} 只 |",
+                f"| 讨论榜获取 | {finder_stats.get('deal_count', finder_stats.get('volume_count', 0))} 只 |",
                 f"| 过滤后剩余 | {finder_stats.get('total_after_filter', 0)} 只 |",
                 "",
                 "---",
@@ -136,7 +136,7 @@ class RecommendationReport:
                 "|--------|------|",
                 f"| 飙升榜获取 | {finder_stats.get('gainers_count', 0)} 只 |",
                 f"| 人气榜获取 | {finder_stats.get('turnover_count', 0)} 只 |",
-                f"| 合并去重后 | {finder_stats.get('total_before_filter', 0)} 只 |",
+                f"| 讨论榜获取 | {finder_stats.get('deal_count', finder_stats.get('volume_count', 0))} 只 |",
                 f"| 过滤后剩余 | {finder_stats.get('total_after_filter', 0)} 只 |",
                 "",
             ])

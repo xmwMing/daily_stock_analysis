@@ -75,6 +75,7 @@ class HotStockFinder:
         self.stats = {
             'gainers_count': 0,
             'volume_count': 0,
+            'deal_count': 0,
             'turnover_count': 0,
             'total_before_filter': 0,
             'total_after_filter': 0
@@ -139,6 +140,7 @@ class HotStockFinder:
             # 更新统计信息
             self.stats['gainers_count'] = len(surge_df) if surge_df is not None and not surge_df.empty else 0
             self.stats['volume_count'] = len(deal_df) if deal_df is not None and not deal_df.empty else 0
+            self.stats['deal_count'] = self.stats['volume_count']
             self.stats['turnover_count'] = len(popularity_df) if popularity_df is not None and not popularity_df.empty else 0
 
             # 合并两个榜单
@@ -181,7 +183,7 @@ class HotStockFinder:
             logger.info(f"合并两个榜单后共获得 {len(all_stocks)} 只不重复的热门股票")
             logger.info(
                 f"各榜单获取数量: 飙升榜={self.stats['gainers_count']}, "
-                f"人气榜={self.stats['turnover_count']}, 讨论榜={self.stats['volume_count']}"
+                f"人气榜={self.stats['turnover_count']}, 讨论榜={self.stats['deal_count']}"
             )
 
             # 使用DataFetcherManager获取详细实时行情数据
