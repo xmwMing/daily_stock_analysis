@@ -3,8 +3,8 @@ name: 每日股票分析
 on:
   # 定时触发（工作日）
   schedule:
-    - cron: '30 5 * * 1-5'  # hot-stocks-only: 周一到周五，北京时间 13:30（UTC 05:30）
-    - cron: '0 6 * * 1-5'   # stocks-only: 周一到周五，北京时间 14:00（UTC 06:00）
+    - cron: '0 6 * * 1-5'  # hot-stocks-only: 周一到周五，北京时间 14:00（UTC 05:30）
+    - cron: '15 6 * * 1-5'   # stocks-only: 周一到周五，北京时间 14:15（UTC 06:00）
   # 手动触发
   workflow_dispatch:
     inputs:
