@@ -366,28 +366,77 @@ def run_full_analysis(
                     trend_analyzer=pipeline.trend_analyzer
                 )
 
-                # 执行推荐流程
-                hot_stock_report = hot_recommender.run()
+                # Step 1: 获取热门推荐（结构化）
+                recommendations = hot_recommender.get_recommendations()
+
+                # 提取推荐代码（最多5只）并规范化
+                top_stock_codes: List[str] = []
+                for rec in recommendations[:5]:
+                    code = canonical_stock_code(rec.stock_info.code)
+                    if code and code not in top_stock_codes:
+                        top_stock_codes.append(code)
+
+                logger.info(f"热门推荐 Top{len(top_stock_codes)} 股票: {', '.join(top_stock_codes) if top_stock_codes else '无'}")
+
+                # Step 2: 对热门推荐股票执行 stocks-only 二次分析（不重复推送）
+                stocks_only_report = ""
+                if top_stock_codes:
+                    logger.info("开始对热门推荐股票执行 stocks-only 二次分析...")
+                    hot_results = pipeline.run(
+                        stock_codes=top_stock_codes,
+                        dry_run=args.dry_run,
+                        send_notification=False,
+                        merge_notification=False,
+                    )
+                    if hot_results:
+                        stocks_only_report = pipeline.notifier.generate_dashboard_report(hot_results)
+
+                # Step 3: 生成最终报告（保持 stocks-only 格式，附加热门榜单统计）
+                finder_stats = hot_recommender.finder.stats or {}
+                hot_summary = (
+                    "# 🔥 热门股票推荐\n\n"
+                    "## 📈 热门榜单统计\n\n"
+                    f"- 飙升榜获取: {finder_stats.get('gainers_count', 0)} 只\n"
+                    f"- 人气榜获取: {finder_stats.get('turnover_count', 0)} 只\n"
+                    f"- 讨论榜获取: {finder_stats.get('deal_count', finder_stats.get('volume_count', 0))} 只\n"
+                    f"- 去重过滤后: {finder_stats.get('total_before_filter', 0)} -> {finder_stats.get('total_after_filter', 0)} 只\n"
+                )
+
+                if top_stock_codes and stocks_only_report:
+                    hot_stock_report = stocks_only_report
+                    if "个股决策仪表盘" in hot_stock_report:
+                        hot_stock_report = hot_stock_report.replace("个股决策仪表盘", "热门股票推荐个股决策仪表盘", 1)
+                    else:
+                        hot_stock_report = f"# 🔥 热门股票推荐\n\n{hot_stock_report}"
+                    hot_stock_report = f"{hot_summary}\n\n---\n\n{hot_stock_report}"
+                elif top_stock_codes:
+                    hot_stock_report = (
+                        f"{hot_summary}\n\n"
+                        "本轮已选出热门股票，但 stocks-only 二次分析未生成有效结果，请稍后重试。"
+                    )
+                else:
+                    hot_stock_report = (
+                        f"{hot_summary}\n\n"
+                        "本轮热门推荐为空，未触发 stocks-only 二次分析。"
+                    )
 
                 # 保存推荐报告到文件
                 if hot_stock_report:
                     date_str = datetime.now().strftime('%Y%m%d')
-                    report_filename = f"hot_stock_recommendations_{date_str}.md"
+                    report_filename = f"hot_stock_comprehensive_{date_str}.md"
                     filepath = pipeline.notifier.save_report_to_file(
                         hot_stock_report,
                         report_filename
                     )
-                    logger.info(f"热门股票推荐报告已保存: {filepath}")
+                    logger.info(f"热门股票综合分析报告已保存: {filepath}")
 
                     # 推送通知（如果启用）
                     if not args.no_notify and pipeline.notifier.is_available():
-                        # 添加标题
-                        report_content = f"# 🔥 热门股票推荐\n\n{hot_stock_report}"
-                        success = pipeline.notifier.send(report_content)
+                        success = pipeline.notifier.send(hot_stock_report)
                         if success:
-                            logger.info("热门股票推荐推送成功")
+                            logger.info("热门股票综合分析推送成功")
                         else:
-                            logger.warning("热门股票推荐推送失败")
+                            logger.warning("热门股票综合分析推送失败")
 
             except Exception as e:
                 logger.error(f"热门股票推荐失败: {e}")
