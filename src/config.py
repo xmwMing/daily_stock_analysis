@@ -1243,10 +1243,10 @@ setup_env()
 HOT_STOCK_CONFIG = {
     'cache_ttl': 1800,
     'top_n': int(os.getenv('HOT_STOCK_TOP_N', '5')),
-    'max_concurrent': 10,
-    'min_score': 60,
-    'history_days': 60,
-    'min_history_days': 30,
+    'max_concurrent': int(os.getenv('HOT_STOCK_MAX_CONCURRENT', '10')),
+    'min_score': int(os.getenv('HOT_STOCK_MIN_SCORE', '60')),
+    'history_days': int(os.getenv('HOT_STOCK_HISTORY_DAYS', '60')),
+    'min_history_days': int(os.getenv('HOT_STOCK_MIN_HISTORY_DAYS', '30')),
     'fetch_count': int(os.getenv('HOT_STOCK_FETCH_COUNT', '10')),
     'filter': {
         'min_price': 3.0,

@@ -12,6 +12,7 @@ import logging
 from typing import List, Optional
 
 from data_provider import DataFetcherManager
+from src.config import HOT_STOCK_CONFIG
 from src.stock_analyzer import StockTrendAnalyzer
 
 from .models import Recommendation
@@ -50,6 +51,7 @@ class HotStockRecommender:
         """
         self.data_fetcher = data_fetcher or DataFetcherManager()
         self.trend_analyzer = trend_analyzer or StockTrendAnalyzer()
+        self.top_n = int(HOT_STOCK_CONFIG.get('top_n', 5))
 
         # 初始化各组件
         self.finder = HotStockFinder(data_manager=self.data_fetcher)
@@ -87,7 +89,7 @@ class HotStockRecommender:
 
             # Step 2: 分析并推荐
             logger.info("Step 2: 分析并推荐...")
-            recommendations = self.recommender.recommend(hot_stocks)
+            recommendations = self.recommender.recommend(hot_stocks, top_n=self.top_n)
 
             if not recommendations:
                 logger.warning("未生成推荐结果")
@@ -122,7 +124,7 @@ class HotStockRecommender:
             if not hot_stocks:
                 return []
 
-            recommendations = self.recommender.recommend(hot_stocks)
+            recommendations = self.recommender.recommend(hot_stocks, top_n=self.top_n)
             return recommendations
 
         except Exception as e:

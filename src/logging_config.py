@@ -71,6 +71,14 @@ def setup_logging(
         debug: 是否启用调试模式（控制台输出 DEBUG 级别）
         extra_quiet_loggers: 额外需要降低日志级别的第三方库列表
     """
+    # 尽量统一控制台编码，避免 Windows 下 emoji / 特殊字符触发编码异常
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     # 确定控制台日志级别
     if console_level is not None:
         level = console_level

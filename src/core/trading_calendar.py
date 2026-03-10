@@ -20,10 +20,19 @@ logger = logging.getLogger(__name__)
 
 # Exchange-calendars availability
 _XCALS_AVAILABLE = False
+_XCALS_WARNED = False
 try:
     import exchange_calendars as xcals
     _XCALS_AVAILABLE = True
 except ImportError:
+    xcals = None
+
+
+def _warn_missing_once() -> None:
+    global _XCALS_WARNED
+    if _XCALS_WARNED:
+        return
+    _XCALS_WARNED = True
     logger.warning(
         "exchange-calendars not installed; trading day check disabled. "
         "Run: pip install exchange-calendars"
@@ -77,6 +86,7 @@ def is_market_open(market: str, check_date: date) -> bool:
         True if trading day (or fail-open), False otherwise
     """
     if not _XCALS_AVAILABLE:
+        _warn_missing_once()
         return True
     ex = MARKET_EXCHANGE.get(market)
     if not ex:
@@ -98,6 +108,7 @@ def get_open_markets_today() -> Set[str]:
         Set of market keys ('cn', 'hk', 'us') that are trading today
     """
     if not _XCALS_AVAILABLE:
+        _warn_missing_once()
         return {"cn", "hk", "us"}
     result: Set[str] = set()
     from zoneinfo import ZoneInfo

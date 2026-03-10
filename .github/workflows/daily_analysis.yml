@@ -157,6 +157,9 @@ jobs:
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
           TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
           HOT_STOCKS_ENABLED: ${{ vars.HOT_STOCKS_ENABLED || secrets.HOT_STOCKS_ENABLED || 'true' }}
+          HOT_STOCK_FETCH_COUNT: ${{ vars.HOT_STOCK_FETCH_COUNT || secrets.HOT_STOCK_FETCH_COUNT || '50' }}
+          HOT_STOCK_TOP_N: ${{ vars.HOT_STOCK_TOP_N || secrets.HOT_STOCK_TOP_N || '5' }}
+          HOT_STOCK_MIN_SCORE: ${{ vars.HOT_STOCK_MIN_SCORE || secrets.HOT_STOCK_MIN_SCORE || '60' }}
           
           # ==========================================
           # 系统配置
