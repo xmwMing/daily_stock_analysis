@@ -41,14 +41,13 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 from data_provider.base import canonical_stock_code
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.market_review import run_market_review
 from src.notification import NotificationService
-
+from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
 from src.logging_config import setup_logging
 
@@ -274,6 +273,10 @@ def run_full_analysis(
     这是定时任务调用的主函数
     """
     try:
+        # Issue #529: Hot-reload STOCK_LIST from .env on each scheduled run
+        if stock_codes is None:
+            config.refresh_stock_list()
+
         # Issue #373: Trading day filter (per-stock, per-market)
         effective_codes = stock_codes if stock_codes is not None else config.stock_list
         filtered_codes, effective_region, should_skip = _compute_trading_day_filter(
@@ -352,33 +355,30 @@ def run_full_analysis(
             if review_result:
                 market_report = review_result
 
-        # 3. 运行热门股票推荐（新增）
+        # 3. 运行热门股票推荐
         hot_stock_report = ""
-        # stocks-only 模式(--no-market-review)跳过热门股票推荐
-        if not args.dry_run and config.hot_stocks_enabled and not getattr(args, 'no_market_review', False):
+        if not args.dry_run and getattr(config, 'hot_stocks_enabled', True) and not getattr(args, 'no_market_review', False):
             try:
                 logger.info("开始热门股票推荐...")
                 from hot_stock_recommender import HotStockRecommender
 
-                # 复用现有的数据获取器和趋势分析器
                 hot_recommender = HotStockRecommender(
                     data_fetcher=pipeline.fetcher_manager,
-                    trend_analyzer=pipeline.trend_analyzer
+                    trend_analyzer=pipeline.trend_analyzer,
                 )
 
-                # Step 1: 获取热门推荐（结构化）
                 recommendations = hot_recommender.get_recommendations()
 
-                # 提取推荐代码（最多5只）并规范化
                 top_stock_codes: List[str] = []
                 for rec in recommendations[:5]:
                     code = canonical_stock_code(rec.stock_info.code)
                     if code and code not in top_stock_codes:
                         top_stock_codes.append(code)
 
-                logger.info(f"热门推荐 Top{len(top_stock_codes)} 股票: {', '.join(top_stock_codes) if top_stock_codes else '无'}")
+                logger.info(
+                    f"热门推荐 Top{len(top_stock_codes)} 股票: {', '.join(top_stock_codes) if top_stock_codes else '无'}"
+                )
 
-                # Step 2: 对热门推荐股票执行 stocks-only 二次分析（不重复推送）
                 stocks_only_report = ""
                 if top_stock_codes:
                     logger.info("开始对热门推荐股票执行 stocks-only 二次分析...")
@@ -391,7 +391,6 @@ def run_full_analysis(
                     if hot_results:
                         stocks_only_report = pipeline.notifier.generate_dashboard_report(hot_results)
 
-                # Step 3: 生成最终报告（保持 stocks-only 格式，附加热门榜单统计）
                 finder_stats = hot_recommender.finder.stats or {}
                 hot_summary = (
                     "# 🔥 热门股票推荐\n\n"
@@ -420,17 +419,12 @@ def run_full_analysis(
                         "本轮热门推荐为空，未触发 stocks-only 二次分析。"
                     )
 
-                # 保存推荐报告到文件
                 if hot_stock_report:
                     date_str = datetime.now().strftime('%Y%m%d')
                     report_filename = f"hot_stock_comprehensive_{date_str}.md"
-                    filepath = pipeline.notifier.save_report_to_file(
-                        hot_stock_report,
-                        report_filename
-                    )
+                    filepath = pipeline.notifier.save_report_to_file(hot_stock_report, report_filename)
                     logger.info(f"热门股票综合分析报告已保存: {filepath}")
 
-                    # 推送通知（如果启用）
                     if not args.no_notify and pipeline.notifier.is_available():
                         success = pipeline.notifier.send(hot_stock_report)
                         if success:
@@ -441,8 +435,7 @@ def run_full_analysis(
             except Exception as e:
                 logger.error(f"热门股票推荐失败: {e}")
                 logger.exception("详细错误信息:")
-                # 推荐失败不影响其他任务
-        elif not config.hot_stocks_enabled:
+        elif not getattr(config, 'hot_stocks_enabled', True):
             logger.info("热门股票推荐功能已禁用，跳过执行")
 
         # Issue #190: 合并推送（个股+大盘复盘）
@@ -451,7 +444,10 @@ def run_full_analysis(
             if market_report:
                 parts.append(f"# 📈 大盘复盘\n\n{market_report}")
             if results:
-                dashboard_content = pipeline.notifier.generate_dashboard_report(results)
+                dashboard_content = pipeline.notifier.generate_aggregate_report(
+                    results,
+                    getattr(config, 'report_type', 'simple'),
+                )
                 parts.append(f"# 🚀 个股决策仪表盘\n\n{dashboard_content}")
             if parts:
                 combined_content = "\n\n---\n\n".join(parts)
@@ -493,14 +489,16 @@ def run_full_analysis(
                 if market_report:
                     full_content += f"# 📈 大盘复盘\n\n{market_report}\n\n---\n\n"
 
-                # 添加个股决策仪表盘（使用 NotificationService 生成）
+                # 添加个股决策仪表盘（使用 NotificationService 生成，按 report_type 分支）
                 if results:
-                    dashboard_content = pipeline.notifier.generate_dashboard_report(results)
+                    dashboard_content = pipeline.notifier.generate_aggregate_report(
+                        results,
+                        getattr(config, 'report_type', 'simple'),
+                    )
                     full_content += f"# 🚀 个股决策仪表盘\n\n{dashboard_content}\n\n---\n\n"
 
-                # 添加热门股票推荐（如果有）
                 if hot_stock_report:
-                    full_content += f"{hot_stock_report}"
+                    full_content += hot_stock_report
 
                 # 3. 创建文档
                 doc_url = feishu_doc.create_daily_doc(doc_title, full_content)
@@ -513,6 +511,26 @@ def run_full_analysis(
         except Exception as e:
             logger.error(f"飞书文档生成失败: {e}")
 
+        # === Auto backtest ===
+        try:
+            if getattr(config, 'backtest_enabled', False):
+                from src.services.backtest_service import BacktestService
+
+                logger.info("开始自动回测...")
+                service = BacktestService()
+                stats = service.run_backtest(
+                    force=False,
+                    eval_window_days=getattr(config, 'backtest_eval_window_days', 10),
+                    min_age_days=getattr(config, 'backtest_min_age_days', 14),
+                    limit=200,
+                )
+                logger.info(
+                    f"自动回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
+                    f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
+                )
+        except Exception as e:
+            logger.warning(f"自动回测失败（已忽略）: {e}")
+
     except Exception as e:
         logger.exception(f"分析流程执行失败: {e}")
 
@@ -520,7 +538,7 @@ def run_full_analysis(
 def start_api_server(host: str, port: int, config: Config) -> None:
     """
     在后台线程启动 FastAPI 服务
-
+    
     Args:
         host: 监听地址
         port: 监听端口
@@ -543,6 +561,11 @@ def start_api_server(host: str, port: int, config: Config) -> None:
     thread.start()
     logger.info(f"FastAPI 服务已启动: http://{host}:{port}")
 
+
+def _is_truthy_env(var_name: str, default: str = "true") -> bool:
+    """Parse common truthy / falsy environment values."""
+    value = os.getenv(var_name, default).strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 def start_bot_stream_clients(config: Config) -> None:
     """Start bot stream clients when enabled in config."""
@@ -631,6 +654,8 @@ def main() -> int:
 
     bot_clients_started = False
     if start_serve:
+        if not prepare_webui_frontend_assets():
+            logger.warning("前端静态资源未就绪，继续启动 FastAPI 服务（Web 页面可能不可用）")
         try:
             start_api_server(host=args.host, port=args.port, config=config)
             bot_clients_started = True
@@ -700,12 +725,13 @@ def main() -> int:
             search_service = None
             analyzer = None
 
-            if config.bocha_api_keys or config.tavily_api_keys or config.brave_api_keys or config.serpapi_keys:
+            if config.bocha_api_keys or config.tavily_api_keys or config.brave_api_keys or config.serpapi_keys or config.minimax_api_keys:
                 search_service = SearchService(
                     bocha_keys=config.bocha_api_keys,
                     tavily_keys=config.tavily_api_keys,
                     brave_keys=config.brave_api_keys,
                     serpapi_keys=config.serpapi_keys,
+                    minimax_keys=config.minimax_api_keys,
                     news_max_age_days=config.news_max_age_days,
                 )
 
@@ -731,28 +757,24 @@ def main() -> int:
             logger.info("模式: 仅热门股票推荐")
             notifier = NotificationService()
 
-            if config.hot_stocks_enabled:
+            if getattr(config, 'hot_stocks_enabled', True):
                 try:
                     logger.info("开始热门股票推荐...")
                     from hot_stock_recommender import HotStockRecommender
 
-                    # 创建推荐系统实例
                     hot_recommender = HotStockRecommender()
-
-                    # Step 1: 生成热门股票推荐（结构化结果）
                     recommendations = hot_recommender.get_recommendations()
 
-                    # 提取推荐代码（最多5只）并规范化
                     top_stock_codes: List[str] = []
                     for rec in recommendations[:5]:
                         code = canonical_stock_code(rec.stock_info.code)
                         if code and code not in top_stock_codes:
                             top_stock_codes.append(code)
 
-                    logger.info(f"热门推荐 Top{len(top_stock_codes)} 股票: {', '.join(top_stock_codes) if top_stock_codes else '无'}")
+                    logger.info(
+                        f"热门推荐 Top{len(top_stock_codes)} 股票: {', '.join(top_stock_codes) if top_stock_codes else '无'}"
+                    )
 
-                    # Step 2: 对热门推荐股票执行 stocks-only 分析
-                    stocks_only_results = []
                     stocks_only_report = ""
                     if top_stock_codes:
                         logger.info("开始对热门推荐股票执行 stocks-only 二次分析...")
@@ -770,11 +792,9 @@ def main() -> int:
                             send_notification=False,
                             merge_notification=False,
                         )
-
                         if stocks_only_results:
                             stocks_only_report = pipeline.notifier.generate_dashboard_report(stocks_only_results)
 
-                    # Step 3: 生成最终报告（保持 stocks-only 格式，仅增加“热门股票推荐”字样）
                     finder_stats = hot_recommender.finder.stats or {}
                     hot_summary = (
                         "# 🔥 热门股票推荐\n\n"
@@ -803,17 +823,12 @@ def main() -> int:
                             "本轮热门推荐为空，未触发 stocks-only 二次分析。"
                         )
 
-                    # 保存最终综合报告到文件
                     if final_report:
                         date_str = datetime.now().strftime('%Y%m%d')
                         report_filename = f"hot_stock_comprehensive_{date_str}.md"
-                        filepath = notifier.save_report_to_file(
-                            final_report,
-                            report_filename
-                        )
+                        filepath = notifier.save_report_to_file(final_report, report_filename)
                         logger.info(f"热门股票综合分析报告已保存: {filepath}")
 
-                        # 推送通知（如果启用）：仅推送最终综合报告
                         if not args.no_notify and notifier.is_available():
                             success = notifier.send(final_report)
                             if success:

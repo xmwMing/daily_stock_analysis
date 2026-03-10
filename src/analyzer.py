@@ -5,80 +5,90 @@ A股自选股智能分析系统 - AI分析层
 ===================================
 
 职责：
-1. 封装 Gemini API 调用逻辑
-2. 利用 Google Search Grounding 获取实时新闻
-3. 结合技术面和消息面生成分析报告
+1. 封装 LLM 调用逻辑（通过 LiteLLM 统一调用 Gemini/Anthropic/OpenAI 等）
+2. 结合技术面和消息面生成分析报告
+3. 解析 LLM 响应为结构化 AnalysisResult
 """
 
 import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
+
+import litellm
 from json_repair import repair_json
+from litellm import Router
 
 from src.agent.llm_adapter import get_thinking_extra_body
-from src.config import get_config
+from src.config import Config, get_config, get_api_keys_for_model, extra_litellm_params
+from src.storage import persist_llm_usage
+from src.data.stock_mapping import STOCK_NAME_MAP
+from src.schemas.report_schema import AnalysisReportSchema
 
 logger = logging.getLogger(__name__)
 
 
-# 股票名称映射（常见股票）
-STOCK_NAME_MAP = {
-    # === A股 ===
-    '600519': '贵州茅台',
-    '000001': '平安银行',
-    '300750': '宁德时代',
-    '002594': '比亚迪',
-    '600036': '招商银行',
-    '601318': '中国平安',
-    '000858': '五粮液',
-    '600276': '恒瑞医药',
-    '601012': '隆基绿能',
-    '002475': '立讯精密',
-    '300059': '东方财富',
-    '002415': '海康威视',
-    '600900': '长江电力',
-    '601166': '兴业银行',
-    '600028': '中国石化',
+def check_content_integrity(result: "AnalysisResult") -> Tuple[bool, List[str]]:
+    """
+    Check mandatory fields for report content integrity.
+    Returns (pass, missing_fields). Module-level for use by pipeline (agent weak mode).
+    """
+    missing: List[str] = []
+    if result.sentiment_score is None:
+        missing.append("sentiment_score")
+    if not (result.operation_advice or "").strip():
+        missing.append("operation_advice")
+    if not (result.analysis_summary or "").strip():
+        missing.append("analysis_summary")
+    dash = result.dashboard or {}
+    core = dash.get("core_conclusion") or {}
+    if not (core.get("one_sentence") or "").strip():
+        missing.append("dashboard.core_conclusion.one_sentence")
+    intel = dash.get("intelligence")
+    if intel is None or "risk_alerts" not in intel:
+        missing.append("dashboard.intelligence.risk_alerts")
+    if result.decision_type in ("buy", "hold"):
+        battle = dash.get("battle_plan") or {}
+        sp = battle.get("sniper_points") or {}
+        stop_loss = sp.get("stop_loss")
+        if stop_loss is None or (isinstance(stop_loss, str) and not stop_loss.strip()):
+            missing.append("dashboard.battle_plan.sniper_points.stop_loss")
+    return len(missing) == 0, missing
 
-    # === 美股 ===
-    'AAPL': '苹果',
-    'TSLA': '特斯拉',
-    'MSFT': '微软',
-    'GOOGL': '谷歌A',
-    'GOOG': '谷歌C',
-    'AMZN': '亚马逊',
-    'NVDA': '英伟达',
-    'META': 'Meta',
-    'AMD': 'AMD',
-    'INTC': '英特尔',
-    'BABA': '阿里巴巴',
-    'PDD': '拼多多',
-    'JD': '京东',
-    'BIDU': '百度',
-    'NIO': '蔚来',
-    'XPEV': '小鹏汽车',
-    'LI': '理想汽车',
-    'COIN': 'Coinbase',
-    'MSTR': 'MicroStrategy',
 
-    # === 港股 (5位数字) ===
-    '00700': '腾讯控股',
-    '03690': '美团',
-    '01810': '小米集团',
-    '09988': '阿里巴巴',
-    '09618': '京东集团',
-    '09888': '百度集团',
-    '01024': '快手',
-    '00981': '中芯国际',
-    '02015': '理想汽车',
-    '09868': '小鹏汽车',
-    '00005': '汇丰控股',
-    '01299': '友邦保险',
-    '00941': '中国移动',
-    '00883': '中国海洋石油',
-}
+def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) -> None:
+    """Fill missing mandatory fields with placeholders (in-place). Module-level for pipeline."""
+    for field in missing_fields:
+        if field == "sentiment_score":
+            result.sentiment_score = 50
+        elif field == "operation_advice":
+            result.operation_advice = result.operation_advice or "待补充"
+        elif field == "analysis_summary":
+            result.analysis_summary = result.analysis_summary or "待补充"
+        elif field == "dashboard.core_conclusion.one_sentence":
+            if not result.dashboard:
+                result.dashboard = {}
+            if "core_conclusion" not in result.dashboard:
+                result.dashboard["core_conclusion"] = {}
+            result.dashboard["core_conclusion"]["one_sentence"] = (
+                result.dashboard["core_conclusion"].get("one_sentence") or "待补充"
+            )
+        elif field == "dashboard.intelligence.risk_alerts":
+            if not result.dashboard:
+                result.dashboard = {}
+            if "intelligence" not in result.dashboard:
+                result.dashboard["intelligence"] = {}
+            if "risk_alerts" not in result.dashboard["intelligence"]:
+                result.dashboard["intelligence"]["risk_alerts"] = []
+        elif field == "dashboard.battle_plan.sniper_points.stop_loss":
+            if not result.dashboard:
+                result.dashboard = {}
+            if "battle_plan" not in result.dashboard:
+                result.dashboard["battle_plan"] = {}
+            if "sniper_points" not in result.dashboard["battle_plan"]:
+                result.dashboard["battle_plan"]["sniper_points"] = {}
+            result.dashboard["battle_plan"]["sniper_points"]["stop_loss"] = "待补充"
 
 
 def get_stock_name_multi_source(
@@ -200,6 +210,12 @@ class AnalysisResult:
     current_price: Optional[float] = None  # 分析时的股价
     change_pct: Optional[float] = None     # 分析时的涨跌幅(%)
 
+    # ========== 模型标记（Issue #528）==========
+    model_used: Optional[str] = None  # 分析使用的 LLM 模型（完整名，如 gemini/gemini-2.0-flash）
+
+    # ========== 历史对比（Report Engine P0）==========
+    query_id: Optional[str] = None  # 本次分析 query_id，用于历史对比时排除本次记录
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -234,6 +250,7 @@ class AnalysisResult:
             'error_message': self.error_message,
             'current_price': self.current_price,
             'change_pct': self.change_pct,
+            'model_used': self.model_used,
         }
 
     def get_core_conclusion(self) -> str:
@@ -519,531 +536,230 @@ class GeminiAnalyzer:
 5. **风险优先级**：舆情中的风险点要醒目标出"""
 
     def __init__(self, api_key: Optional[str] = None):
-        """
-        初始化 AI 分析器
-
-        优先级：Gemini > Anthropic > OpenAI
+        """Initialize LLM Analyzer via LiteLLM.
 
         Args:
-            api_key: Gemini API Key（可选，默认从配置读取）
+            api_key: Ignored (kept for backward compatibility). Keys are loaded from config.
         """
-        config = get_config()
-        self._api_key = api_key or config.gemini_api_key
-        self._model = None
-        self._current_model_name = None  # 当前使用的模型名称
-        self._using_fallback = False  # 是否正在使用备选模型
-        self._use_openai = False  # 是否使用 OpenAI 兼容 API
-        self._use_anthropic = False  # 是否使用 Anthropic Claude API
-        self._openai_client = None  # OpenAI 客户端
-        self._anthropic_client = None  # Anthropic 客户端
+        self._router = None
+        self._litellm_available = False
+        self._init_litellm()
+        if not self._litellm_available:
+            logger.warning("No LLM configured (LITELLM_MODEL / API keys), AI analysis will be unavailable")
 
-        # 检查 Gemini API Key 是否有效（过滤占位符）
-        gemini_key_valid = self._api_key and not self._api_key.startswith('your_') and len(self._api_key) > 10
-
-        # 优先级：Gemini > Anthropic > OpenAI
-        if gemini_key_valid:
-            try:
-                self._init_model()
-            except Exception as e:
-                logger.warning(f"Gemini init failed: {e}, trying Anthropic then OpenAI")
-                self._try_anthropic_then_openai()
-        else:
-            logger.info("Gemini API Key not configured, trying Anthropic then OpenAI")
-            self._try_anthropic_then_openai()
-
-        if not self._model and not self._anthropic_client and not self._openai_client:
-            logger.warning("No AI API Key configured, AI analysis will be unavailable")
-
-    def _try_anthropic_then_openai(self) -> None:
-        """优先尝试 Anthropic，其次 OpenAI 作为备选。两者均初始化以供运行时互为故障转移（如 Anthropic 429 时切 OpenAI）。"""
-        self._init_anthropic_fallback()
-        self._init_openai_fallback()
-
-    def _init_anthropic_fallback(self) -> None:
-        """
-        初始化 Anthropic Claude API 作为备选。
-
-        使用 Anthropic Messages API：https://docs.anthropic.com/en/api/messages
-        """
-        config = get_config()
-        anthropic_key_valid = (
-            config.anthropic_api_key
-            and not config.anthropic_api_key.startswith('your_')
-            and len(config.anthropic_api_key) > 10
+    def _has_channel_config(self, config: Config) -> bool:
+        """Check if multi-channel config (channels / YAML / legacy model_list) is active."""
+        return bool(config.llm_model_list) and not all(
+            e.get('model_name', '').startswith('__legacy_') for e in config.llm_model_list
         )
-        if not anthropic_key_valid:
-            logger.debug("Anthropic API Key not configured or invalid")
-            return
-        try:
-            from anthropic import Anthropic
 
-            self._anthropic_client = Anthropic(api_key=config.anthropic_api_key)
-            self._current_model_name = config.anthropic_model
-            self._use_anthropic = True
+    def _init_litellm(self) -> None:
+        """Initialize litellm Router from channels / YAML / legacy keys."""
+        config = get_config()
+        litellm_model = config.litellm_model
+        if not litellm_model:
+            logger.warning("Analyzer LLM: LITELLM_MODEL not configured")
+            return
+
+        self._litellm_available = True
+
+        # --- Channel / YAML path: build Router from pre-built model_list ---
+        if self._has_channel_config(config):
+            model_list = config.llm_model_list
+            self._router = Router(
+                model_list=model_list,
+                routing_strategy="simple-shuffle",
+                num_retries=2,
+            )
+            unique_models = list(dict.fromkeys(
+                e['litellm_params']['model'] for e in model_list
+            ))
             logger.info(
-                f"Anthropic Claude API init OK (model: {config.anthropic_model})"
+                f"Analyzer LLM: Router initialized from channels/YAML — "
+                f"{len(model_list)} deployment(s), models: {unique_models}"
             )
-        except ImportError:
-            logger.error("anthropic package not installed, run: pip install anthropic")
-        except Exception as e:
-            logger.error(f"Anthropic API init failed: {e}")
-
-    def _init_openai_fallback(self) -> None:
-        """
-        初始化 OpenAI 兼容 API 作为备选
-
-        支持所有 OpenAI 格式的 API，包括：
-        - OpenAI 官方
-        - DeepSeek
-        - 通义千问
-        - Moonshot 等
-        """
-        config = get_config()
-
-        # 检查 OpenAI API Key 是否有效（过滤占位符）
-        openai_key_valid = (
-            config.openai_api_key and
-            not config.openai_api_key.startswith('your_') and
-            len(config.openai_api_key) >= 8
-        )
-
-        if not openai_key_valid:
-            logger.debug("OpenAI 兼容 API 未配置或配置无效")
             return
 
-        # 分离 import 和客户端创建，以便提供更准确的错误信息
-        try:
-            from openai import OpenAI
-        except ImportError:
-            logger.error("未安装 openai 库，请运行: pip install openai")
-            return
+        # --- Legacy path: build Router for multi-key, or use single key ---
+        keys = get_api_keys_for_model(litellm_model, config)
 
-        try:
-            # base_url 可选，不填则使用 OpenAI 官方默认地址
-            client_kwargs = {"api_key": config.openai_api_key}
-            if config.openai_base_url and config.openai_base_url.startswith('http'):
-                client_kwargs["base_url"] = config.openai_base_url
-            if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
-                client_kwargs["default_headers"] = {"APP-Code": "GPIJ3886"}
-
-            self._openai_client = OpenAI(**client_kwargs)
-            self._current_model_name = config.openai_model
-            self._use_openai = True
-            logger.info(f"OpenAI 兼容 API 初始化成功 (base_url: {config.openai_base_url}, model: {config.openai_model})")
-        except ImportError as e:
-            # 依赖缺失（如 socksio）
-            if 'socksio' in str(e).lower() or 'socks' in str(e).lower():
-                logger.error(f"OpenAI 客户端需要 SOCKS 代理支持，请运行: pip install httpx[socks] 或 pip install socksio")
-            else:
-                logger.error(f"OpenAI 依赖缺失: {e}")
-        except Exception as e:
-            error_msg = str(e).lower()
-            if 'socks' in error_msg or 'socksio' in error_msg or 'proxy' in error_msg:
-                logger.error(f"OpenAI 代理配置错误: {e}，如使用 SOCKS 代理请运行: pip install httpx[socks]")
-            else:
-                logger.error(f"OpenAI 兼容 API 初始化失败: {e}")
-
-    def _init_model(self) -> None:
-        """
-        初始化 Gemini 模型
-
-        配置：
-        - 使用 gemini-3-flash-preview 或 gemini-2.5-flash 模型
-        - 不启用 Google Search（使用外部 Tavily/SerpAPI 搜索）
-        """
-        try:
-            import google.generativeai as genai
-
-            # 配置 API Key
-            genai.configure(api_key=self._api_key)
-
-            # 从配置获取模型名称
-            config = get_config()
-            model_name = config.gemini_model
-            fallback_model = config.gemini_model_fallback
-
-            # 不再使用 Google Search Grounding（已知有兼容性问题）
-            # 改为使用外部搜索服务（Tavily/SerpAPI）预先获取新闻
-
-            # 尝试初始化主模型
-            try:
-                self._model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=self.SYSTEM_PROMPT,
-                )
-                self._current_model_name = model_name
-                self._using_fallback = False
-                logger.info(f"Gemini 模型初始化成功 (模型: {model_name})")
-            except Exception as model_error:
-                # 尝试备选模型
-                logger.warning(f"主模型 {model_name} 初始化失败: {model_error}，尝试备选模型 {fallback_model}")
-                self._model = genai.GenerativeModel(
-                    model_name=fallback_model,
-                    system_instruction=self.SYSTEM_PROMPT,
-                )
-                self._current_model_name = fallback_model
-                self._using_fallback = True
-                logger.info(f"Gemini 备选模型初始化成功 (模型: {fallback_model})")
-
-        except Exception as e:
-            logger.error(f"Gemini 模型初始化失败: {e}")
-            self._model = None
-
-    def _switch_to_fallback_model(self) -> bool:
-        """
-        切换到备选模型
-
-        Returns:
-            是否成功切换
-        """
-        try:
-            import google.generativeai as genai
-            config = get_config()
-            fallback_model = config.gemini_model_fallback
-
-            logger.warning(f"[LLM] 切换到备选模型: {fallback_model}")
-            self._model = genai.GenerativeModel(
-                model_name=fallback_model,
-                system_instruction=self.SYSTEM_PROMPT,
+        if len(keys) > 1:
+            # Build legacy Router for primary model multi-key load-balancing
+            extra_params = extra_litellm_params(litellm_model, config)
+            legacy_model_list = [
+                {
+                    "model_name": litellm_model,
+                    "litellm_params": {
+                        "model": litellm_model,
+                        "api_key": k,
+                        **extra_params,
+                    },
+                }
+                for k in keys
+            ]
+            self._router = Router(
+                model_list=legacy_model_list,
+                routing_strategy="simple-shuffle",
+                num_retries=2,
             )
-            self._current_model_name = fallback_model
-            self._using_fallback = True
-            logger.info(f"[LLM] 备选模型 {fallback_model} 初始化成功")
-            return True
-        except Exception as e:
-            logger.error(f"[LLM] 切换备选模型失败: {e}")
-            return False
+            logger.info(
+                f"Analyzer LLM: Legacy Router initialized with {len(keys)} keys "
+                f"for {litellm_model}"
+            )
+        elif keys:
+            logger.info(f"Analyzer LLM: litellm initialized (model={litellm_model})")
+        else:
+            logger.info(
+                f"Analyzer LLM: litellm initialized (model={litellm_model}, "
+                f"API key from environment)"
+            )
 
     def is_available(self) -> bool:
-        """检查分析器是否可用。"""
-        return (
-            self._model is not None
-            or self._anthropic_client is not None
-            or self._openai_client is not None
+        """Check if LiteLLM is properly configured with at least one API key."""
+        return self._router is not None or self._litellm_available
+
+    def _call_litellm(self, prompt: str, generation_config: dict) -> Tuple[str, str, Dict[str, Any]]:
+        """Call LLM via litellm with fallback across configured models.
+
+        When channels/YAML are configured, every model goes through the Router
+        (which handles per-model key selection, load balancing, and retries).
+        In legacy mode, the primary model may use the Router while fallback
+        models fall back to direct litellm.completion().
+
+        Args:
+            prompt: User prompt text.
+            generation_config: Dict with optional keys: temperature, max_output_tokens, max_tokens.
+
+        Returns:
+            Tuple of (response text, model_used, usage). On success model_used is the full model
+            name and usage is a dict with prompt_tokens, completion_tokens, total_tokens.
+        """
+        config = get_config()
+        max_tokens = (
+            generation_config.get('max_output_tokens')
+            or generation_config.get('max_tokens')
+            or 8192
         )
+        temperature = generation_config.get('temperature', 0.7)
 
-    def _call_anthropic_api(self, prompt: str, generation_config: dict) -> str:
-        """
-        调用 Anthropic Claude Messages API。
+        models_to_try = [config.litellm_model] + (config.litellm_fallback_models or [])
+        models_to_try = [m for m in models_to_try if m]
 
-        Args:
-            prompt: 用户提示词
-            generation_config: 生成配置（temperature, max_output_tokens）
-
-        Returns:
-            响应文本
-        """
-        config = get_config()
-        max_retries = config.gemini_max_retries
-        base_delay = config.gemini_retry_delay
-        temperature = generation_config.get(
-            'temperature', config.anthropic_temperature
-        )
-        max_tokens = generation_config.get('max_output_tokens', config.anthropic_max_tokens)
-
-        for attempt in range(max_retries):
-            try:
-                if attempt > 0:
-                    delay = base_delay * (2 ** (attempt - 1))
-                    delay = min(delay, 60)
-                    logger.info(
-                        f"[Anthropic] Retry {attempt + 1}/{max_retries}, "
-                        f"waiting {delay:.1f}s..."
-                    )
-                    time.sleep(delay)
-
-                message = self._anthropic_client.messages.create(
-                    model=self._current_model_name,
-                    max_tokens=max_tokens,
-                    system=self.SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                )
-                if (
-                    message.content
-                    and len(message.content) > 0
-                    and hasattr(message.content[0], 'text')
-                ):
-                    return message.content[0].text
-                raise ValueError("Anthropic API returned empty response")
-            except Exception as e:
-                error_str = str(e)
-                is_rate_limit = (
-                    '429' in error_str
-                    or 'rate' in error_str.lower()
-                    or 'quota' in error_str.lower()
-                )
-                if is_rate_limit:
-                    logger.warning(
-                        f"[Anthropic] Rate limit, attempt {attempt + 1}/"
-                        f"{max_retries}: {error_str[:100]}"
-                    )
-                else:
-                    logger.warning(
-                        f"[Anthropic] API failed, attempt {attempt + 1}/"
-                        f"{max_retries}: {error_str[:100]}"
-                    )
-                if attempt == max_retries - 1:
-                    raise
-        raise Exception("Anthropic API failed after max retries")
-
-    def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
-        """
-        调用 OpenAI 兼容 API
-
-        Args:
-            prompt: 提示词
-            generation_config: 生成配置
-
-        Returns:
-            响应文本
-        """
-        config = get_config()
-        max_retries = config.gemini_max_retries
-        base_delay = config.gemini_retry_delay
-
-        def _build_base_request_kwargs() -> dict:
-            # OpenAI-compatible path (DeepSeek, Qwen, etc.): add extra_body for thinking models
-            model_name = self._current_model_name
-            kwargs = {
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": generation_config.get('temperature', config.openai_temperature),
-            }
-            payload = get_thinking_extra_body(model_name)
-            if payload:
-                kwargs["extra_body"] = payload
-            return kwargs
-
-        def _is_unsupported_param_error(error_message: str, param_name: str) -> bool:
-            lower_msg = error_message.lower()
-            return ('400' in lower_msg or "unsupported parameter" in lower_msg or "unsupported param" in lower_msg) and param_name in lower_msg
-
-        if not hasattr(self, "_token_param_mode"):
-            self._token_param_mode = {}
-
-        max_output_tokens = generation_config.get('max_output_tokens', 8192)
-        model_name = self._current_model_name
-        mode = self._token_param_mode.get(model_name, "max_tokens")
-
-        def _kwargs_with_mode(mode_value):
-            kwargs = _build_base_request_kwargs()
-            if mode_value is not None:
-                kwargs[mode_value] = max_output_tokens
-            return kwargs
-
-        for attempt in range(max_retries):
-            try:
-                if attempt > 0:
-                    delay = base_delay * (2 ** (attempt - 1))
-                    delay = min(delay, 60)
-                    logger.info(f"[OpenAI] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
-                    time.sleep(delay)
-
-                try:
-                    response = self._openai_client.chat.completions.create(**_kwargs_with_mode(mode))
-                except Exception as e:
-                    error_str = str(e)
-                    if mode == "max_tokens" and _is_unsupported_param_error(error_str, "max_tokens"):
-                        mode = "max_completion_tokens"
-                        self._token_param_mode[model_name] = mode
-                        response = self._openai_client.chat.completions.create(**_kwargs_with_mode(mode))
-                    elif mode == "max_completion_tokens" and _is_unsupported_param_error(error_str, "max_completion_tokens"):
-                        mode = None
-                        self._token_param_mode[model_name] = mode
-                        response = self._openai_client.chat.completions.create(**_kwargs_with_mode(mode))
-                    else:
-                        raise
-
-                if response and response.choices and response.choices[0].message.content:
-                    return response.choices[0].message.content
-                else:
-                    raise ValueError("OpenAI API 返回空响应")
-
-            except Exception as e:
-                error_str = str(e)
-                is_rate_limit = '429' in error_str or 'rate' in error_str.lower() or 'quota' in error_str.lower()
-
-                if is_rate_limit:
-                    logger.warning(f"[OpenAI] API 限流，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
-                else:
-                    logger.warning(f"[OpenAI] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
-
-                if attempt == max_retries - 1:
-                    raise
-
-        raise Exception("OpenAI API 调用失败，已达最大重试次数")
-
-    def _call_api_with_retry(self, prompt: str, generation_config: dict) -> str:
-        """
-        调用 AI API，带有重试和模型切换机制
-
-        优先级：Gemini > Gemini 备选模型 > OpenAI 兼容 API
-
-        处理 429 限流错误：
-        1. 先指数退避重试
-        2. 多次失败后切换到备选模型
-        3. Gemini 完全失败后尝试 OpenAI
-
-        Args:
-            prompt: 提示词
-            generation_config: 生成配置
-
-        Returns:
-            响应文本
-        """
-        # 若使用 Anthropic，调用 Anthropic（失败时回退到 OpenAI）
-        if self._use_anthropic:
-            try:
-                return self._call_anthropic_api(prompt, generation_config)
-            except Exception as anthropic_error:
-                if self._openai_client:
-                    logger.warning(
-                        "[Anthropic] All retries failed, falling back to OpenAI"
-                    )
-                    return self._call_openai_api(prompt, generation_config)
-                raise anthropic_error
-
-        # 若使用 OpenAI（仅当无 Anthropic 时为主选）
-        if self._use_openai:
-            return self._call_openai_api(prompt, generation_config)
-
-        config = get_config()
-        max_retries = config.gemini_max_retries
-        base_delay = config.gemini_retry_delay
+        use_channel_router = self._has_channel_config(config)
 
         last_error = None
-        tried_fallback = getattr(self, '_using_fallback', False)
-
-        for attempt in range(max_retries):
+        for model in models_to_try:
             try:
-                # 请求前增加延时（防止请求过快触发限流）
-                if attempt > 0:
-                    delay = base_delay * (2 ** (attempt - 1))  # 指数退避: 5, 10, 20, 40...
-                    delay = min(delay, 60)  # 最大60秒
-                    logger.info(f"[Gemini] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
-                    time.sleep(delay)
+                model_short = model.split("/")[-1] if "/" in model else model
+                call_kwargs: Dict[str, Any] = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": self.SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                extra = get_thinking_extra_body(model_short)
+                if extra:
+                    call_kwargs["extra_body"] = extra
 
-                response = self._model.generate_content(
-                    prompt,
-                    generation_config=generation_config,
-                    request_options={"timeout": 120}
-                )
-
-                if response and response.text:
-                    return response.text
+                if use_channel_router and self._router:
+                    # Channel / YAML path: Router manages key + base_url per model
+                    response = self._router.completion(**call_kwargs)
+                elif self._router and model == config.litellm_model:
+                    # Legacy path: Router only for primary model multi-key
+                    response = self._router.completion(**call_kwargs)
                 else:
-                    raise ValueError("Gemini 返回空响应")
+                    # Legacy path: direct call for fallback models
+                    keys = get_api_keys_for_model(model, config)
+                    if keys:
+                        call_kwargs["api_key"] = keys[0]
+                    call_kwargs.update(extra_litellm_params(model, config))
+                    response = litellm.completion(**call_kwargs)
+
+                if response and response.choices and response.choices[0].message.content:
+                    usage: Dict[str, Any] = {}
+                    if response.usage:
+                        usage = {
+                            "prompt_tokens": response.usage.prompt_tokens or 0,
+                            "completion_tokens": response.usage.completion_tokens or 0,
+                            "total_tokens": response.usage.total_tokens or 0,
+                        }
+                    return (response.choices[0].message.content, model, usage)
+                raise ValueError("LLM returned empty response")
 
             except Exception as e:
+                logger.warning(f"[LiteLLM] {model} failed: {e}")
                 last_error = e
-                error_str = str(e)
+                continue
 
-                # 检查是否是 429 限流错误
-                is_rate_limit = '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower()
+        raise Exception(f"All LLM models failed (tried {len(models_to_try)} model(s)). Last error: {last_error}")
 
-                if is_rate_limit:
-                    logger.warning(f"[Gemini] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
+    def generate_text(
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+    ) -> Optional[str]:
+        """Public entry point for free-form text generation.
 
-                    # 如果已经重试了一半次数且还没切换过备选模型，尝试切换
-                    if attempt >= max_retries // 2 and not tried_fallback:
-                        if self._switch_to_fallback_model():
-                            tried_fallback = True
-                            logger.info("[Gemini] 已切换到备选模型，继续重试")
-                        else:
-                            logger.warning("[Gemini] 切换备选模型失败，继续使用当前模型重试")
-                else:
-                    # 非限流错误，记录并继续重试
-                    logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
+        External callers (e.g. MarketAnalyzer) must use this method instead of
+        calling _call_litellm() directly or accessing private attributes such as
+        _litellm_available, _router, _model, _use_openai, or _use_anthropic.
 
-        # Gemini 重试耗尽，尝试 Anthropic 再 OpenAI
-        if self._anthropic_client:
-            logger.warning("[Gemini] All retries failed, switching to Anthropic")
-            try:
-                return self._call_anthropic_api(prompt, generation_config)
-            except Exception as anthropic_error:
-                logger.warning(
-                    f"[Anthropic] Fallback failed: {anthropic_error}"
-                )
-                if self._openai_client:
-                    logger.warning("[Gemini] Trying OpenAI as final fallback")
-                    try:
-                        return self._call_openai_api(prompt, generation_config)
-                    except Exception as openai_error:
-                        logger.error(
-                            f"[OpenAI] Final fallback also failed: {openai_error}"
-                        )
-                        raise last_error or anthropic_error or openai_error
-                raise last_error or anthropic_error
+        Args:
+            prompt:      Text prompt to send to the LLM.
+            max_tokens:  Maximum tokens in the response (default 2048).
+            temperature: Sampling temperature (default 0.7).
 
-        if self._openai_client:
-            logger.warning("[Gemini] All retries failed, switching to OpenAI")
-            try:
-                return self._call_openai_api(prompt, generation_config)
-            except Exception as openai_error:
-                logger.error(f"[OpenAI] Fallback also failed: {openai_error}")
-                raise last_error or openai_error
-        # 懒加载 Anthropic，再尝试 OpenAI
-        if config.anthropic_api_key and not self._anthropic_client:
-            logger.warning("[Gemini] Trying lazy-init Anthropic API")
-            self._init_anthropic_fallback()
-            if self._anthropic_client:
-                try:
-                    return self._call_anthropic_api(prompt, generation_config)
-                except Exception as ae:
-                    logger.warning(f"[Anthropic] Lazy fallback failed: {ae}")
-                    if self._openai_client:
-                        try:
-                            return self._call_openai_api(prompt, generation_config)
-                        except Exception as oe:
-                            raise last_error or ae or oe
-                    raise last_error or ae
-        if config.openai_api_key and not self._openai_client:
-            logger.warning("[Gemini] Trying lazy-init OpenAI API")
-            self._init_openai_fallback()
-            if self._openai_client:
-                try:
-                    return self._call_openai_api(prompt, generation_config)
-                except Exception as openai_error:
-                    logger.error(f"[OpenAI] Lazy fallback also failed: {openai_error}")
-                    raise last_error or openai_error
-
-        # 所有备选均耗尽
-        raise last_error or Exception("所有 AI API 调用失败，已达最大重试次数")
+        Returns:
+            Response text, or None if the LLM call fails (error is logged).
+        """
+        try:
+            result = self._call_litellm(
+                prompt,
+                generation_config={"max_tokens": max_tokens, "temperature": temperature},
+            )
+            if isinstance(result, tuple):
+                text, model_used, usage = result
+                persist_llm_usage(usage, model_used, call_type="market_review")
+                return text
+            return result
+        except Exception as exc:
+            logger.error("[generate_text] LLM call failed: %s", exc)
+            return None
 
     def analyze(
-        self,
+        self, 
         context: Dict[str, Any],
         news_context: Optional[str] = None
     ) -> AnalysisResult:
         """
         分析单只股票
-
+        
         流程：
         1. 格式化输入数据（技术面 + 新闻）
         2. 调用 Gemini API（带重试和模型切换）
         3. 解析 JSON 响应
         4. 返回结构化结果
-
+        
         Args:
             context: 从 storage.get_analysis_context() 获取的上下文数据
             news_context: 预先搜索的新闻内容（可选）
-
+            
         Returns:
             AnalysisResult 对象
         """
         code = context.get('code', 'Unknown')
         config = get_config()
-
+        
         # 请求前增加延时（防止连续请求触发限流）
         request_delay = config.gemini_request_delay
         if request_delay > 0:
             logger.debug(f"[LLM] 请求前等待 {request_delay:.1f} 秒...")
             time.sleep(request_delay)
-
+        
         # 优先从上下文获取股票名称（由 main.py 传入）
         name = context.get('stock_name')
         if not name or name.startswith('股票'):
@@ -1053,7 +769,7 @@ class GeminiAnalyzer:
             else:
                 # 最后从映射表获取
                 name = STOCK_NAME_MAP.get(code, f'股票{code}')
-
+        
         # 如果模型不可用，返回默认结果
         if not self.is_available():
             return AnalysisResult(
@@ -1064,22 +780,18 @@ class GeminiAnalyzer:
                 operation_advice='持有',
                 confidence_level='低',
                 analysis_summary='AI 分析功能未启用（未配置 API Key）',
-                risk_warning='请配置 Gemini API Key 后重试',
+                risk_warning='请配置 LLM API Key（GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY）后重试',
                 success=False,
-                error_message='Gemini API Key 未配置',
+                error_message='LLM API Key 未配置',
+                model_used=None,
             )
-
+        
         try:
             # 格式化输入（包含技术面数据和新闻）
             prompt = self._format_prompt(context, name, news_context)
-
-            # 获取模型名称
-            model_name = getattr(self, '_current_model_name', None)
-            if not model_name:
-                model_name = getattr(self._model, '_model_name', 'unknown')
-                if hasattr(self._model, 'model_name'):
-                    model_name = self._model.model_name
-
+            
+            config = get_config()
+            model_name = config.litellm_model or "unknown"
             logger.info(f"========== AI 分析 {name}({code}) ==========")
             logger.info(f"[LLM配置] 模型: {model_name}")
             logger.info(f"[LLM配置] Prompt 长度: {len(prompt)} 字符")
@@ -1090,49 +802,73 @@ class GeminiAnalyzer:
             logger.info(f"[LLM Prompt 预览]\n{prompt_preview}")
             logger.debug(f"=== 完整 Prompt ({len(prompt)}字符) ===\n{prompt}\n=== End Prompt ===")
 
-            # 设置生成配置（从配置文件读取温度参数）
-            config = get_config()
+            # 设置生成配置
             generation_config = {
                 "temperature": config.gemini_temperature,
                 "max_output_tokens": 8192,
             }
-            # 动态获取当前使用的 API 名称
-            api_name = "DeepSeek API" if self._use_openai else "Gemini API"
-            model_name = self._current_model_name
 
-            logger.info(f"[LLM调用] 开始调用 {api_name} (模型: {model_name}, temperature={generation_config['temperature']}, max_tokens={generation_config['max_output_tokens']})...")
+            logger.info(f"[LLM调用] 开始调用 {model_name}...")
 
-            # 记录实际使用的 API 提供方
-            api_provider = (
-                "OpenAI" if self._use_openai
-                else "Anthropic" if self._use_anthropic
-                else "Gemini"
-            )
-            logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
+            # 使用 litellm 调用（支持完整性校验重试）
+            current_prompt = prompt
+            retry_count = 0
+            max_retries = config.report_integrity_retry if config.report_integrity_enabled else 0
 
-            # 使用带重试的 API 调用
-            start_time = time.time()
-            response_text = self._call_api_with_retry(prompt, generation_config)
-            elapsed = time.time() - start_time
+            while True:
+                start_time = time.time()
+                response_text, model_used, llm_usage = self._call_litellm(current_prompt, generation_config)
+                elapsed = time.time() - start_time
 
-            # 记录响应信息
-            logger.info(f"[LLM返回] {api_provider} API 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符")
+                # 记录响应信息
+                logger.info(
+                    f"[LLM返回] {model_name} 响应成功, 耗时 {elapsed:.2f}s, 响应长度 {len(response_text)} 字符"
+                )
+                response_preview = response_text[:300] + "..." if len(response_text) > 300 else response_text
+                logger.info(f"[LLM返回 预览]\n{response_preview}")
+                logger.debug(
+                    f"=== {model_name} 完整响应 ({len(response_text)}字符) ===\n{response_text}\n=== End Response ==="
+                )
 
-            # 记录响应预览（INFO级别）和完整响应（DEBUG级别）
-            response_preview = response_text[:300] + "..." if len(response_text) > 300 else response_text
-            logger.info(f"[LLM返回 预览]\n{response_preview}")
-            logger.debug(f"=== {api_provider} 完整响应 ({len(response_text)}字符) ===\n{response_text}\n=== End Response ===")
+                # 解析响应
+                result = self._parse_response(response_text, code, name)
+                result.raw_response = response_text
+                result.search_performed = bool(news_context)
+                result.market_snapshot = self._build_market_snapshot(context)
+                result.model_used = model_used
 
-            # 解析响应
-            result = self._parse_response(response_text, code, name)
-            result.raw_response = response_text
-            result.search_performed = bool(news_context)
-            result.market_snapshot = self._build_market_snapshot(context)
+                # 内容完整性校验（可选）
+                if not config.report_integrity_enabled:
+                    break
+                pass_integrity, missing_fields = self._check_content_integrity(result)
+                if pass_integrity:
+                    break
+                if retry_count < max_retries:
+                    current_prompt = self._build_integrity_retry_prompt(
+                        prompt,
+                        response_text,
+                        missing_fields,
+                    )
+                    retry_count += 1
+                    logger.info(
+                        "[LLM完整性] 必填字段缺失 %s，第 %d 次补全重试",
+                        missing_fields,
+                        retry_count,
+                    )
+                else:
+                    self._apply_placeholder_fill(result, missing_fields)
+                    logger.warning(
+                        "[LLM完整性] 必填字段缺失 %s，已占位补全，不阻塞流程",
+                        missing_fields,
+                    )
+                    break
+
+            persist_llm_usage(llm_usage, model_used, call_type="analysis", stock_code=code)
 
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
 
             return result
-
+            
         except Exception as e:
             logger.error(f"AI 分析 {name}({code}) 失败: {e}")
             return AnalysisResult(
@@ -1146,33 +882,34 @@ class GeminiAnalyzer:
                 risk_warning='分析失败，请稍后重试或手动分析',
                 success=False,
                 error_message=str(e),
+                model_used=None,
             )
-
+    
     def _format_prompt(
-        self,
-        context: Dict[str, Any],
+        self, 
+        context: Dict[str, Any], 
         name: str,
         news_context: Optional[str] = None
     ) -> str:
         """
         格式化分析提示词（决策仪表盘 v2.0）
-
+        
         包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
-
+        
         Args:
             context: 技术面数据上下文（包含增强数据）
             name: 股票名称（默认值，可能被上下文覆盖）
             news_context: 预先搜索的新闻内容
         """
         code = context.get('code', 'Unknown')
-
+        
         # 优先使用上下文中的股票名称（从 realtime_quote 获取）
         stock_name = context.get('stock_name', name)
         if not stock_name or stock_name == f'股票{code}':
             stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
-
+            
         today = context.get('today', {})
-
+        
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
 
@@ -1206,7 +943,7 @@ class GeminiAnalyzer:
 | MA20 | {today.get('ma20', 'N/A')} | 中期趋势线 |
 | 均线形态 | {context.get('ma_status', '未知')} | 多头/空头/缠绕 |
 """
-
+        
         # 添加实时行情数据（量比、换手率等）
         if 'realtime' in context:
             rt = context['realtime']
@@ -1223,7 +960,7 @@ class GeminiAnalyzer:
 | 流通市值 | {self._format_amount(rt.get('circ_mv'))} | |
 | 60日涨跌幅 | {rt.get('change_60d', 'N/A')}% | 中期表现 |
 """
-
+        
         # 添加筹码分布数据
         if 'chip' in context:
             chip = context['chip']
@@ -1238,7 +975,7 @@ class GeminiAnalyzer:
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', '未知')} | |
 """
-
+        
         # 添加趋势分析结果（基于交易理念的预判）
         if 'trend_analysis' in context:
             trend = context['trend_analysis']
@@ -1263,7 +1000,7 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
-
+        
         # 添加昨日对比数据
         if 'yesterday' in context:
             volume_change = context.get('volume_change_ratio', 'N/A')
@@ -1272,7 +1009,7 @@ class GeminiAnalyzer:
 - 成交量较昨日变化：{volume_change}倍
 - 价格较昨日变化：{context.get('price_change_ratio', 'N/A')}%
 """
-
+        
         # 添加新闻搜索结果（重点区域）
         prompt += """
 ---
@@ -1322,7 +1059,8 @@ class GeminiAnalyzer:
 
 """
         prompt += f"""
-### ⚠️ 重要：股票名称确认
+### ⚠️ 重要：输出正确的股票名称格式
+正确的股票名称格式为“股票名称（股票代码）”，例如“贵州茅台（600519）”。
 如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
 
 ### 重点关注（必须明确回答）：
@@ -1340,9 +1078,9 @@ class GeminiAnalyzer:
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
 
 请输出完整的 JSON 格式决策仪表盘。"""
-
+        
         return prompt
-
+    
     def _format_volume(self, volume: Optional[float]) -> str:
         """格式化成交量显示"""
         if volume is None:
@@ -1353,7 +1091,7 @@ class GeminiAnalyzer:
             return f"{volume / 1e4:.2f} 万股"
         else:
             return f"{volume:.0f} 股"
-
+    
     def _format_amount(self, amount: Optional[float]) -> str:
         """格式化成交额显示"""
         if amount is None:
@@ -1431,15 +1169,57 @@ class GeminiAnalyzer:
 
         return snapshot
 
-    def _parse_response(
+    def _check_content_integrity(self, result: AnalysisResult) -> Tuple[bool, List[str]]:
+        """Delegate to module-level check_content_integrity."""
+        return check_content_integrity(result)
+
+    def _build_integrity_complement_prompt(self, missing_fields: List[str]) -> str:
+        """Build complement instruction for missing mandatory fields."""
+        lines = ["### 补全要求：请在上方分析基础上补充以下必填内容，并输出完整 JSON："]
+        for f in missing_fields:
+            if f == "sentiment_score":
+                lines.append("- sentiment_score: 0-100 综合评分")
+            elif f == "operation_advice":
+                lines.append("- operation_advice: 买入/加仓/持有/减仓/卖出/观望")
+            elif f == "analysis_summary":
+                lines.append("- analysis_summary: 综合分析摘要")
+            elif f == "dashboard.core_conclusion.one_sentence":
+                lines.append("- dashboard.core_conclusion.one_sentence: 一句话决策")
+            elif f == "dashboard.intelligence.risk_alerts":
+                lines.append("- dashboard.intelligence.risk_alerts: 风险警报列表（可为空数组）")
+            elif f == "dashboard.battle_plan.sniper_points.stop_loss":
+                lines.append("- dashboard.battle_plan.sniper_points.stop_loss: 止损价")
+        return "\n".join(lines)
+
+    def _build_integrity_retry_prompt(
         self,
-        response_text: str,
-        code: str,
+        base_prompt: str,
+        previous_response: str,
+        missing_fields: List[str],
+    ) -> str:
+        """Build retry prompt using the previous response as the complement baseline."""
+        complement = self._build_integrity_complement_prompt(missing_fields)
+        previous_output = previous_response.strip()
+        return "\n\n".join([
+            base_prompt,
+            "### 上一次输出如下，请在该输出基础上补齐缺失字段，并重新输出完整 JSON。不要省略已有字段：",
+            previous_output,
+            complement,
+        ])
+
+    def _apply_placeholder_fill(self, result: AnalysisResult, missing_fields: List[str]) -> None:
+        """Delegate to module-level apply_placeholder_fill."""
+        apply_placeholder_fill(result, missing_fields)
+
+    def _parse_response(
+        self, 
+        response_text: str, 
+        code: str, 
         name: str
     ) -> AnalysisResult:
         """
         解析 Gemini 响应（决策仪表盘版）
-
+        
         尝试从响应中提取 JSON 格式的分析结果，包含 dashboard 字段
         如果解析失败，尝试智能提取或返回默认结果
         """
@@ -1450,18 +1230,27 @@ class GeminiAnalyzer:
                 cleaned_text = cleaned_text.replace('```json', '').replace('```', '')
             elif '```' in cleaned_text:
                 cleaned_text = cleaned_text.replace('```', '')
-
+            
             # 尝试找到 JSON 内容
             json_start = cleaned_text.find('{')
             json_end = cleaned_text.rfind('}') + 1
-
+            
             if json_start >= 0 and json_end > json_start:
                 json_str = cleaned_text[json_start:json_end]
-
+                
                 # 尝试修复常见的 JSON 问题
                 json_str = self._fix_json_string(json_str)
-
+                
                 data = json.loads(json_str)
+
+                # Schema validation (lenient: on failure, continue with raw dict)
+                try:
+                    AnalysisReportSchema.model_validate(data)
+                except Exception as e:
+                    logger.warning(
+                        "LLM report schema validation failed, continuing with raw dict: %s",
+                        str(e)[:100],
+                    )
 
                 # 提取 dashboard 数据
                 dashboard = data.get('dashboard', None)
@@ -1482,7 +1271,7 @@ class GeminiAnalyzer:
                         decision_type = 'sell'
                     else:
                         decision_type = 'hold'
-
+                
                 return AnalysisResult(
                     code=code,
                     name=name,
@@ -1525,35 +1314,35 @@ class GeminiAnalyzer:
                 # 没有找到 JSON，尝试从纯文本中提取信息
                 logger.warning(f"无法从响应中提取 JSON，使用原始文本分析")
                 return self._parse_text_response(response_text, code, name)
-
+                
         except json.JSONDecodeError as e:
             logger.warning(f"JSON 解析失败: {e}，尝试从文本提取")
             return self._parse_text_response(response_text, code, name)
-
+    
     def _fix_json_string(self, json_str: str) -> str:
         """修复常见的 JSON 格式问题"""
         import re
-
+        
         # 移除注释
         json_str = re.sub(r'//.*?\n', '\n', json_str)
         json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
-
+        
         # 修复尾随逗号
         json_str = re.sub(r',\s*}', '}', json_str)
         json_str = re.sub(r',\s*]', ']', json_str)
-
+        
         # 确保布尔值是小写
         json_str = json_str.replace('True', 'true').replace('False', 'false')
-
+        
         # fix by json-repair
         json_str = repair_json(json_str)
-
+        
         return json_str
-
+    
     def _parse_text_response(
-        self,
-        response_text: str,
-        code: str,
+        self, 
+        response_text: str, 
+        code: str, 
         name: str
     ) -> AnalysisResult:
         """从纯文本响应中尽可能提取分析信息"""
@@ -1561,16 +1350,16 @@ class GeminiAnalyzer:
         sentiment_score = 50
         trend = '震荡'
         advice = '持有'
-
+        
         text_lower = response_text.lower()
-
+        
         # 简单的情绪识别
         positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy']
         negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell']
-
+        
         positive_count = sum(1 for kw in positive_keywords if kw in text_lower)
         negative_count = sum(1 for kw in negative_keywords if kw in text_lower)
-
+        
         if positive_count > negative_count + 1:
             sentiment_score = 65
             trend = '看多'
@@ -1583,10 +1372,10 @@ class GeminiAnalyzer:
             decision_type = 'sell'
         else:
             decision_type = 'hold'
-
+        
         # 截取前500字符作为摘要
         summary = response_text[:500] if response_text else '无分析结果'
-
+        
         return AnalysisResult(
             code=code,
             name=name,
@@ -1601,34 +1390,34 @@ class GeminiAnalyzer:
             raw_response=response_text,
             success=True,
         )
-
+    
     def batch_analyze(
-        self,
+        self, 
         contexts: List[Dict[str, Any]],
         delay_between: float = 2.0
     ) -> List[AnalysisResult]:
         """
         批量分析多只股票
-
+        
         注意：为避免 API 速率限制，每次分析之间会有延迟
-
+        
         Args:
             contexts: 上下文数据列表
             delay_between: 每次分析之间的延迟（秒）
-
+            
         Returns:
             AnalysisResult 列表
         """
         results = []
-
+        
         for i, context in enumerate(contexts):
             if i > 0:
                 logger.debug(f"等待 {delay_between} 秒后继续...")
                 time.sleep(delay_between)
-
+            
             result = self.analyze(context)
             results.append(result)
-
+        
         return results
 
 
@@ -1641,7 +1430,7 @@ def get_analyzer() -> GeminiAnalyzer:
 if __name__ == "__main__":
     # 测试代码
     logging.basicConfig(level=logging.DEBUG)
-
+    
     # 模拟上下文数据
     test_context = {
         'code': '600519',
@@ -1663,9 +1452,9 @@ if __name__ == "__main__":
         'volume_change_ratio': 1.3,
         'price_change_ratio': 1.5,
     }
-
+    
     analyzer = GeminiAnalyzer()
-
+    
     if analyzer.is_available():
         print("=== AI 分析测试 ===")
         result = analyzer.analyze(test_context)

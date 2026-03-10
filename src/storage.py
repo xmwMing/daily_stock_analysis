@@ -38,6 +38,7 @@ from sqlalchemy import (
     and_,
     delete,
     desc,
+    func,
 )
 from sqlalchemy.orm import (
     declarative_base,
@@ -378,6 +379,22 @@ class ConversationMessage(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class LLMUsage(Base):
+    """One row per litellm.completion() call — token-usage audit log."""
+
+    __tablename__ = 'llm_usage'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # 'analysis' | 'agent' | 'market_review'
+    call_type = Column(String(32), nullable=False, index=True)
+    model = Column(String(128), nullable=False)
+    stock_code = Column(String(16), nullable=True)
+    prompt_tokens = Column(Integer, nullable=False, default=0)
+    completion_tokens = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    called_at = Column(DateTime, default=datetime.now, index=True)
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -517,6 +534,9 @@ class DatabaseManager:
         """
         if target_date is None:
             target_date = date.today()
+        # 注意：这里的 target_date 语义是“自然日”，而不是“最新交易日”。
+        # 在周末/节假日/非交易日运行时，即使数据库已有最新交易日数据，这里也会返回 False。
+        # 该行为目前保留（按需求不改逻辑）。
         
         with self.get_session() as session:
             result = session.execute(
@@ -785,7 +805,8 @@ class DatabaseManager:
         code: Optional[str] = None,
         query_id: Optional[str] = None,
         days: int = 30,
-        limit: int = 50
+        limit: int = 50,
+        exclude_query_id: Optional[str] = None,
     ) -> List[AnalysisHistory]:
         """
         Query analysis history records.
@@ -793,6 +814,7 @@ class DatabaseManager:
         Notes:
         - If query_id is provided, perform exact lookup and ignore days window.
         - If query_id is not provided, apply days-based time filtering.
+        - exclude_query_id: exclude records with this query_id (for history comparison).
         """
         cutoff_date = datetime.now() - timedelta(days=days)
 
@@ -806,6 +828,10 @@ class DatabaseManager:
 
             if code:
                 conditions.append(AnalysisHistory.code == code)
+
+            # exclude_query_id only applies when not doing exact lookup (query_id is None)
+            if exclude_query_id and not query_id:
+                conditions.append(AnalysisHistory.query_id != exclude_query_id)
 
             results = session.execute(
                 select(AnalysisHistory)
@@ -886,6 +912,27 @@ class DatabaseManager:
         with self.get_session() as session:
             result = session.execute(
                 select(AnalysisHistory).where(AnalysisHistory.id == record_id)
+            ).scalars().first()
+            return result
+
+    def get_latest_analysis_by_query_id(self, query_id: str) -> Optional[AnalysisHistory]:
+        """
+        根据 query_id 查询最新一条分析历史记录
+
+        query_id 在批量分析时可能重复，故返回最近创建的一条。
+
+        Args:
+            query_id: 分析记录关联的 query_id
+
+        Returns:
+            AnalysisHistory 对象，不存在返回 None
+        """
+        with self.get_session() as session:
+            result = session.execute(
+                select(AnalysisHistory)
+                .where(AnalysisHistory.query_id == query_id)
+                .order_by(desc(AnalysisHistory.created_at))
+                .limit(1)
             ).scalars().first()
             return result
     
@@ -1035,6 +1082,10 @@ class DatabaseManager:
         """
         if target_date is None:
             target_date = date.today()
+        # 注意：尽管入参提供了 target_date，但当前实现实际使用的是“最新两天数据”（get_latest_data），
+        # 并不会按 target_date 精确取当日/前一交易日的上下文。
+        # 因此若未来需要支持“按历史某天复盘/重算”的可解释性，这里需要调整。
+        # 该行为目前保留（按需求不改逻辑）。
         
         # 获取最近2天数据
         recent_data = self.get_latest_data(code, days=2)
@@ -1080,6 +1131,9 @@ class DatabaseManager:
         - 空头排列：close < ma5 < ma10 < ma20
         - 震荡整理：其他情况
         """
+        # 注意：这里的均线形态判断基于“close/ma5/ma10/ma20”静态比较，
+        # 未考虑均线拐点、斜率、或不同数据源复权口径差异。
+        # 该行为目前保留（按需求不改逻辑）。
         close = data.close or 0
         ma5 = data.ma5 or 0
         ma10 = data.ma10 or 0
@@ -1157,15 +1211,20 @@ class DatabaseManager:
     @staticmethod
     def _parse_sniper_value(value: Any) -> Optional[float]:
         """
-        解析狙击点位数值
+        Parse a sniper point value from various formats to float.
+
+        Handles: numeric types, plain number strings, Chinese price formats
+        like "18.50元", range formats like "18.50-19.00", and text with
+        embedded numbers while filtering out MA indicators.
         """
         if value is None:
             return None
         if isinstance(value, (int, float)):
-            return float(value)
+            v = float(value)
+            return v if v > 0 else None
 
-        text = str(value).replace(',', '').strip()
-        if not text:
+        text = str(value).replace(',', '').replace('，', '').strip()
+        if not text or text == '-' or text == '—' or text == 'N/A':
             return None
 
         # 尝试直接解析纯数字字符串
@@ -1199,12 +1258,19 @@ class DatabaseManager:
                 except ValueError:
                     pass
 
-        # 兜底：无"元"字时（如 "102.10-103.00（MA5附近）"），
-        # 提取最后一个非 MA 前缀的数字
+        # 兜底：无"元"字时，先截去第一个括号后的内容，避免误提取括号内技术指标数字
+        # 例如 "1.52-1.53 (回踩MA5/10附近)" → 仅在 "1.52-1.53 " 中搜索
+        paren_pos = len(text)
+        for paren_char in ('(', '（'):
+            pos = text.find(paren_char)
+            if pos != -1:
+                paren_pos = min(paren_pos, pos)
+        search_text = text[:paren_pos].strip() or text  # 括号前为空时降级用全文
+
         valid_numbers = []
-        for m in re.finditer(r"\d+(?:\.\d+)?", text):
+        for m in re.finditer(r"\d+(?:\.\d+)?", search_text):
             start_idx = m.start()
-            if start_idx >= 2 and text[start_idx-2:start_idx].upper() == "MA":
+            if start_idx >= 2 and search_text[start_idx-2:start_idx].upper() == "MA":
                 continue
             valid_numbers.append(m.group())
         if valid_numbers:
@@ -1216,11 +1282,30 @@ class DatabaseManager:
 
     def _extract_sniper_points(self, result: Any) -> Dict[str, Optional[float]]:
         """
-        抽取狙击点位数据
+        Extract sniper point values from an AnalysisResult.
+
+        Tries multiple extraction paths to handle different dashboard structures:
+        1. result.get_sniper_points() (standard path)
+        2. Direct dashboard dict traversal with various nesting levels
+        3. Fallback from raw_result dict if available
         """
         raw_points = {}
+
+        # Path 1: standard method
         if hasattr(result, "get_sniper_points"):
             raw_points = result.get_sniper_points() or {}
+
+        # Path 2: direct dashboard traversal when standard path yields empty values
+        if not any(raw_points.get(k) for k in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")):
+            dashboard = getattr(result, "dashboard", None)
+            if isinstance(dashboard, dict):
+                raw_points = self._find_sniper_in_dashboard(dashboard) or raw_points
+
+        # Path 3: try raw_result for agent mode results
+        if not any(raw_points.get(k) for k in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")):
+            raw_response = getattr(result, "raw_response", None)
+            if isinstance(raw_response, dict):
+                raw_points = self._find_sniper_in_dashboard(raw_response) or raw_points
 
         return {
             "ideal_buy": self._parse_sniper_value(raw_points.get("ideal_buy")),
@@ -1228,6 +1313,43 @@ class DatabaseManager:
             "stop_loss": self._parse_sniper_value(raw_points.get("stop_loss")),
             "take_profit": self._parse_sniper_value(raw_points.get("take_profit")),
         }
+
+    @staticmethod
+    def _find_sniper_in_dashboard(d: dict) -> Optional[Dict[str, Any]]:
+        """
+        Recursively search for sniper_points in a dashboard dict.
+        Handles various nesting: dashboard.battle_plan.sniper_points,
+        dashboard.dashboard.battle_plan.sniper_points, etc.
+        """
+        if not isinstance(d, dict):
+            return None
+
+        # Direct: d has sniper_points keys at top level
+        if "ideal_buy" in d:
+            return d
+
+        # d.sniper_points
+        sp = d.get("sniper_points")
+        if isinstance(sp, dict) and sp:
+            return sp
+
+        # d.battle_plan.sniper_points
+        bp = d.get("battle_plan")
+        if isinstance(bp, dict):
+            sp = bp.get("sniper_points")
+            if isinstance(sp, dict) and sp:
+                return sp
+
+        # d.dashboard.battle_plan.sniper_points (double-nested)
+        inner = d.get("dashboard")
+        if isinstance(inner, dict):
+            bp = inner.get("battle_plan")
+            if isinstance(bp, dict):
+                sp = bp.get("sniper_points")
+                if isinstance(sp, dict) and sp:
+                    return sp
+
+        return None
 
     @staticmethod
     def _build_fallback_url_key(
@@ -1356,11 +1478,120 @@ class DatabaseManager:
             )
             return result.rowcount
 
+    # ------------------------------------------------------------------
+    # LLM usage tracking
+    # ------------------------------------------------------------------
+
+    def record_llm_usage(
+        self,
+        call_type: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        stock_code: Optional[str] = None,
+    ) -> None:
+        """Append one LLM call record to llm_usage."""
+        row = LLMUsage(
+            call_type=call_type,
+            model=model or "unknown",
+            stock_code=stock_code,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+        with self.session_scope() as session:
+            session.add(row)
+
+    def get_llm_usage_summary(
+        self,
+        from_dt: datetime,
+        to_dt: datetime,
+    ) -> Dict[str, Any]:
+        """Return aggregated token usage between from_dt and to_dt.
+
+        Returns a dict with keys:
+          total_calls, total_tokens,
+          by_call_type: list of {call_type, calls, total_tokens},
+          by_model:     list of {model, calls, total_tokens}
+        """
+        with self.session_scope() as session:
+            base_filter = and_(
+                LLMUsage.called_at >= from_dt,
+                LLMUsage.called_at <= to_dt,
+            )
+
+            # Overall totals
+            totals = session.execute(
+                select(
+                    func.count(LLMUsage.id).label("calls"),
+                    func.coalesce(func.sum(LLMUsage.total_tokens), 0).label("tokens"),
+                ).where(base_filter)
+            ).one()
+
+            # Breakdown by call_type
+            by_type_rows = session.execute(
+                select(
+                    LLMUsage.call_type,
+                    func.count(LLMUsage.id).label("calls"),
+                    func.coalesce(func.sum(LLMUsage.total_tokens), 0).label("tokens"),
+                )
+                .where(base_filter)
+                .group_by(LLMUsage.call_type)
+                .order_by(desc(func.sum(LLMUsage.total_tokens)))
+            ).all()
+
+            # Breakdown by model
+            by_model_rows = session.execute(
+                select(
+                    LLMUsage.model,
+                    func.count(LLMUsage.id).label("calls"),
+                    func.coalesce(func.sum(LLMUsage.total_tokens), 0).label("tokens"),
+                )
+                .where(base_filter)
+                .group_by(LLMUsage.model)
+                .order_by(desc(func.sum(LLMUsage.total_tokens)))
+            ).all()
+
+        return {
+            "total_calls": totals.calls,
+            "total_tokens": totals.tokens,
+            "by_call_type": [
+                {"call_type": r.call_type, "calls": r.calls, "total_tokens": r.tokens}
+                for r in by_type_rows
+            ],
+            "by_model": [
+                {"model": r.model, "calls": r.calls, "total_tokens": r.tokens}
+                for r in by_model_rows
+            ],
+        }
+
 
 # 便捷函数
 def get_db() -> DatabaseManager:
     """获取数据库管理器实例的快捷方式"""
     return DatabaseManager.get_instance()
+
+
+def persist_llm_usage(
+    usage: Dict[str, Any],
+    model: str,
+    call_type: str,
+    stock_code: Optional[str] = None,
+) -> None:
+    """Fire-and-forget: write one LLM call record to llm_usage. Never raises."""
+    try:
+        db = DatabaseManager.get_instance()
+        db.record_llm_usage(
+            call_type=call_type,
+            model=model,
+            prompt_tokens=usage.get("prompt_tokens", 0) or 0,
+            completion_tokens=usage.get("completion_tokens", 0) or 0,
+            total_tokens=usage.get("total_tokens", 0) or 0,
+            stock_code=stock_code,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("[LLM usage] failed to persist usage record: %s", exc)
 
 
 if __name__ == "__main__":

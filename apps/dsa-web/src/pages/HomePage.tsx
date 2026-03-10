@@ -1,11 +1,13 @@
 import type React from 'react';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ApiErrorAlert } from '../components/common';
+import { getParsedApiError } from '../api/error';
 import type { HistoryItem, AnalysisReport, TaskInfo } from '../types/analysis';
 import { historyApi } from '../api/history';
 import { analysisApi, DuplicateTaskError } from '../api/analysis';
 import { validateStockCode } from '../utils/validation';
-import { getRecentStartDate, toDateInputValue } from '../utils/format';
+import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { useAnalysisStore } from '../stores/analysisStore';
 import { ReportSummary } from '../components/report';
 import { HistoryList } from '../components/history';
@@ -17,7 +19,11 @@ import { useTaskStream } from '../hooks';
  * 顶部输入 + 左侧历史 + 右侧报告
  */
 const HomePage: React.FC = () => {
-  const { setLoading, setError: setStoreError } = useAnalysisStore();
+  const {
+    error: analysisError,
+    setLoading,
+    setError: setStoreError,
+  } = useAnalysisStore();
   const navigate = useNavigate();
 
   // 输入状态
@@ -40,6 +46,7 @@ const HomePage: React.FC = () => {
   // 任务队列状态
   const [activeTasks, setActiveTasks] = useState<TaskInfo[]>([]);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // 用于跟踪当前分析请求，避免竞态条件
   const analysisRequestIdRef = useRef<number>(0);
@@ -81,7 +88,7 @@ const HomePage: React.FC = () => {
     onTaskFailed: (task) => {
       updateTask(task);
       // 显示错误提示
-      setStoreError(task.error || '分析失败');
+      setStoreError(getParsedApiError(task.error || '分析失败'));
       // 延迟移除任务
       setTimeout(() => removeTask(task.taskId), 5000);
     },
@@ -91,7 +98,15 @@ const HomePage: React.FC = () => {
     enabled: true,
   });
 
-// 加载历史列表
+// 用 ref 追踪易变状态，避免 fetchHistory 频繁重建导致 effect 循环
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  const historyItemsRef = useRef(historyItems);
+  historyItemsRef.current = historyItems;
+  const selectedReportRef = useRef(selectedReport);
+  selectedReportRef.current = selectedReport;
+
+  // 加载历史列表
   const fetchHistory = useCallback(async (autoSelectFirst = false, reset = true, silent = false) => {
     if (!silent) {
       if (reset) {
@@ -100,60 +115,64 @@ const HomePage: React.FC = () => {
       } else {
         setIsLoadingMore(true);
       }
-    } else if (reset) {
-      // Silent reset still needs page reset for correct API call
-      setCurrentPage(1);
     }
 
-    const page = reset ? 1 : currentPage + 1;
+    // page is always 1 when reset=true, regardless of currentPageRef; the ref
+    // is only used for load-more (reset=false) to get the next page number.
+    const page = reset ? 1 : currentPageRef.current + 1;
 
     try {
-      // TODO: Proper timezone handling needed
-      // Using tomorrow as endDate is a temporary workaround to include today's records.
-      // This may incorrectly include tomorrow's data and is semantically inconsistent across timezones.
-      // Better solution: standardize backend & frontend to use UTC or fixed timezone (Asia/Shanghai),
-      // or construct endDate on frontend as end-of-day timestamp.
-      const tomorrowDate = new Date();
-      tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-      
       const response = await historyApi.getList({
         startDate: getRecentStartDate(30),
-        endDate: toDateInputValue(tomorrowDate),
+        endDate: getTodayInShanghai(),
         page,
         limit: pageSize,
       });
 
-      if (reset) {
+      if (silent && reset) {
+        // 后台刷新：合并新增项到列表顶部，保留已加载的分页数据和滚动位置
+        setHistoryItems(prev => {
+          const existingIds = new Set(prev.map(item => item.id));
+          const newItems = response.items.filter(item => !existingIds.has(item.id));
+          return newItems.length > 0 ? [...newItems, ...prev] : prev;
+        });
+      } else if (reset) {
         setHistoryItems(response.items);
+        setCurrentPage(1);
       } else {
         setHistoryItems(prev => [...prev, ...response.items]);
+        setCurrentPage(page);
       }
 
       // 判断是否还有更多数据
-      const totalLoaded = reset ? response.items.length : historyItems.length + response.items.length;
-      setHasMore(totalLoaded < response.total);
-      setCurrentPage(page);
+      if (!silent) {
+        const totalLoaded = reset ? response.items.length : historyItemsRef.current.length + response.items.length;
+        setHasMore(totalLoaded < response.total);
+      }
 
       // 如果需要自动选择第一条，且有数据，且当前没有选中报告
-      if (autoSelectFirst && response.items.length > 0 && !selectedReport) {
+      if (autoSelectFirst && response.items.length > 0 && !selectedReportRef.current) {
         const firstItem = response.items[0];
         setIsLoadingReport(true);
         try {
           const report = await historyApi.getDetail(firstItem.id);
+          setStoreError(null);
           setSelectedReport(report);
         } catch (err) {
           console.error('Failed to fetch first report:', err);
+          setStoreError(getParsedApiError(err));
         } finally {
           setIsLoadingReport(false);
         }
       }
     } catch (err) {
       console.error('Failed to fetch history:', err);
+      setStoreError(getParsedApiError(err));
     } finally {
       setIsLoadingHistory(false);
       setIsLoadingMore(false);
     }
-  }, [selectedReport, currentPage, historyItems.length, pageSize]);
+  }, [pageSize, setStoreError]);
 
   // 加载更多历史记录
   const handleLoadMore = useCallback(() => {
@@ -162,10 +181,11 @@ const HomePage: React.FC = () => {
     }
   }, [fetchHistory, isLoadingMore, hasMore]);
 
-  // 初始加载 - 自动选择第一条
+  // 初始加载 - 自动选择第一条（仅挂载时执行一次）
   useEffect(() => {
     fetchHistory(true);
-  }, [fetchHistory]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Background polling: re-fetch history every 30s for CLI-initiated analyses
   useEffect(() => {
@@ -173,7 +193,8 @@ const HomePage: React.FC = () => {
       fetchHistory(false, true, true);
     }, 30_000);
     return () => clearInterval(interval);
-  }, [fetchHistory]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Refresh when tab regains visibility (e.g. user ran main.py in another terminal)
   useEffect(() => {
@@ -184,21 +205,27 @@ const HomePage: React.FC = () => {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [fetchHistory]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 点击历史项加载报告
   const handleHistoryClick = async (recordId: number) => {
-    // 取消当前分析请求的结果显示（通过递增 requestId）
-    analysisRequestIdRef.current += 1;
+    // Increment request ID to cancel any in-flight auto-select result.
+    const requestId = ++analysisRequestIdRef.current;
 
-    setIsLoadingReport(true);
+    // Keep the current report visible while
+    // the new one loads so the right panel doesn't flash a blank spinner on
+    // every click. isLoadingReport is only used for the initial empty state.
     try {
       const report = await historyApi.getDetail(recordId);
-      setSelectedReport(report);
+      // Ignore result if a newer click has already been issued.
+      if (requestId === analysisRequestIdRef.current) {
+        setStoreError(null);
+        setSelectedReport(report);
+      }
     } catch (err) {
       console.error('Failed to fetch report:', err);
-    } finally {
-      setIsLoadingReport(false);
+      setStoreError(getParsedApiError(err));
     }
   };
 
@@ -240,7 +267,7 @@ const HomePage: React.FC = () => {
           // 显示重复任务错误
           setDuplicateError(`股票 ${err.stockCode} 正在分析中，请等待完成`);
         } else {
-          setStoreError(err instanceof Error ? err.message : '分析失败');
+          setStoreError(getParsedApiError(err));
         }
       }
     } finally {
@@ -256,16 +283,42 @@ const HomePage: React.FC = () => {
     }
   };
 
+  const sidebarContent = (
+    <div className="flex flex-col gap-3 overflow-hidden min-h-0 h-full">
+      <TaskPanel tasks={activeTasks} />
+      <HistoryList
+        items={historyItems}
+        isLoading={isLoadingHistory}
+        isLoadingMore={isLoadingMore}
+        hasMore={hasMore}
+        selectedId={selectedReport?.meta.id}
+        onItemClick={(id) => { handleHistoryClick(id); setSidebarOpen(false); }}
+        onLoadMore={handleLoadMore}
+        className="max-h-[62vh] md:max-h-[62vh] flex-1 overflow-hidden"
+      />
+    </div>
+  );
+
   return (
     <div
-      className="min-h-screen grid overflow-hidden w-full"
+      className="min-h-screen flex flex-col md:grid overflow-hidden w-full"
       style={{ gridTemplateColumns: 'minmax(12px, 1fr) 256px 24px minmax(auto, 896px) minmax(12px, 1fr)', gridTemplateRows: 'auto 1fr' }}
     >
-      {/* 顶部输入栏 - 与历史记录框左对齐，与 Market Sentiment 外框右对齐（不含 col5 右 padding） */}
+      {/* 顶部输入栏 */}
       <header
-        className="col-start-2 col-end-5 row-start-1 py-3 border-b border-white/5 flex-shrink-0 flex items-center min-w-0 overflow-hidden"
+        className="md:col-start-2 md:col-end-5 md:row-start-1 py-3 px-3 md:px-0 border-b border-white/5 flex-shrink-0 flex items-center min-w-0 overflow-hidden"
       >
         <div className="flex items-center gap-2 w-full min-w-0 flex-1" style={{ maxWidth: 'min(100%, 1168px)' }}>
+          {/* Mobile hamburger */}
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="md:hidden p-1.5 -ml-1 rounded-lg hover:bg-white/10 transition-colors text-secondary hover:text-white flex-shrink-0"
+            title="历史记录"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
           <div className="flex-1 relative min-w-0">
             <input
               type="text"
@@ -307,25 +360,32 @@ const HomePage: React.FC = () => {
         </div>
       </header>
 
-      {/* 左侧：任务面板 + 历史列表 */}
-      <div
-        className="col-start-2 row-start-2 flex flex-col gap-3 overflow-hidden min-h-0"
-      >
-        <TaskPanel tasks={activeTasks} />
-        <HistoryList
-          items={historyItems}
-          isLoading={isLoadingHistory}
-          isLoadingMore={isLoadingMore}
-          hasMore={hasMore}
-          selectedId={selectedReport?.meta.id}
-          onItemClick={handleHistoryClick}
-          onLoadMore={handleLoadMore}
-          className="max-h-[62vh] overflow-hidden"
-        />
+      {/* Desktop sidebar */}
+      <div className="hidden md:flex col-start-2 row-start-2 flex-col gap-3 overflow-hidden min-h-0">
+        {sidebarContent}
       </div>
 
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 md:hidden" onClick={() => setSidebarOpen(false)}>
+          <div className="absolute inset-0 bg-black/60" />
+          <div
+            className="absolute left-0 top-0 bottom-0 w-72 flex flex-col glass-card overflow-hidden border-r border-white/10 shadow-2xl p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {sidebarContent}
+          </div>
+        </div>
+      )}
+
       {/* 右侧报告详情 */}
-      <section className="col-start-4 row-start-2 flex-1 overflow-y-auto pl-1 min-w-0 min-h-0">
+      <section className="md:col-start-4 md:row-start-2 flex-1 overflow-y-auto overflow-x-auto px-3 md:px-0 md:pl-1 min-w-0 min-h-0">
+        {analysisError ? (
+          <ApiErrorAlert
+            error={analysisError}
+            className="mb-3"
+          />
+        ) : null}
         {isLoadingReport ? (
           <div className="flex flex-col items-center justify-center h-full">
             <div className="w-10 h-10 border-3 border-cyan/20 border-t-cyan rounded-full animate-spin" />

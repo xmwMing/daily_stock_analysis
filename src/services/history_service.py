@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 from src.storage import DatabaseManager
+from src.utils.data_processing import normalize_model_used, parse_json_field
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,70 @@ class HistoryService:
         except Exception as e:
             logger.error(f"查询历史列表失败: {e}", exc_info=True)
             return {"total": 0, "items": []}
-    
+
+    def _resolve_record(self, record_id: str):
+        """
+        Resolve a record_id parameter to an AnalysisHistory object.
+
+        Tries integer primary key first; falls back to query_id string lookup
+        when the value is not a valid integer.
+
+        Args:
+            record_id: integer PK (as string) or query_id string
+
+        Returns:
+            AnalysisHistory object or None
+        """
+        try:
+            int_id = int(record_id)
+            record = self.db.get_analysis_history_by_id(int_id)
+            if record:
+                return record
+        except (ValueError, TypeError):
+            pass
+        # Fall back to query_id lookup
+        return self.db.get_latest_analysis_by_query_id(record_id)
+
+    def resolve_and_get_detail(self, record_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Resolve record_id (int PK or query_id string) and return history detail.
+
+        Args:
+            record_id: integer PK (as string) or query_id string
+
+        Returns:
+            Complete analysis report dict, or None
+        """
+        try:
+            record = self._resolve_record(record_id)
+            if not record:
+                return None
+            return self._record_to_detail_dict(record)
+        except Exception as e:
+            logger.error(f"resolve_and_get_detail failed for {record_id}: {e}", exc_info=True)
+            return None
+
+    def resolve_and_get_news(self, record_id: str, limit: int = 20) -> List[Dict[str, str]]:
+        """
+        Resolve record_id (int PK or query_id string) and return associated news.
+
+        Args:
+            record_id: integer PK (as string) or query_id string
+            limit: max items to return
+
+        Returns:
+            List of news intel dicts
+        """
+        try:
+            record = self._resolve_record(record_id)
+            if not record:
+                logger.warning(f"resolve_and_get_news: record not found for {record_id}")
+                return []
+            return self.get_news_intel(query_id=record.query_id, limit=limit)
+        except Exception as e:
+            logger.error(f"resolve_and_get_news failed for {record_id}: {e}", exc_info=True)
+            return []
+
     def get_history_detail_by_id(self, record_id: int) -> Optional[Dict[str, Any]]:
         """
         获取历史报告详情
@@ -124,44 +188,80 @@ class HistoryService:
             record = self.db.get_analysis_history_by_id(record_id)
             if not record:
                 return None
-
-            raw_result = None
-            if record.raw_result:
-                try:
-                    raw_result = json.loads(record.raw_result)
-                except json.JSONDecodeError:
-                    raw_result = record.raw_result
-
-            context_snapshot = None
-            if record.context_snapshot:
-                try:
-                    context_snapshot = json.loads(record.context_snapshot)
-                except json.JSONDecodeError:
-                    context_snapshot = record.context_snapshot
-
-            return {
-                "id": record.id,
-                "query_id": record.query_id,
-                "stock_code": record.code,
-                "stock_name": record.name,
-                "report_type": record.report_type,
-                "created_at": record.created_at.isoformat() if record.created_at else None,
-                "analysis_summary": record.analysis_summary,
-                "operation_advice": record.operation_advice,
-                "trend_prediction": record.trend_prediction,
-                "sentiment_score": record.sentiment_score,
-                "sentiment_label": self._get_sentiment_label(record.sentiment_score or 50),
-                "ideal_buy": str(record.ideal_buy) if record.ideal_buy else None,
-                "secondary_buy": str(record.secondary_buy) if record.secondary_buy else None,
-                "stop_loss": str(record.stop_loss) if record.stop_loss else None,
-                "take_profit": str(record.take_profit) if record.take_profit else None,
-                "news_content": record.news_content,
-                "raw_result": raw_result,
-                "context_snapshot": context_snapshot,
-            }
+            return self._record_to_detail_dict(record)
         except Exception as e:
             logger.error(f"根据 ID 查询历史详情失败: {e}", exc_info=True)
             return None
+
+    @staticmethod
+    def _normalize_display_sniper_value(value: Any) -> Optional[str]:
+        """Normalize sniper point values for history display."""
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text in {"-", "—", "N/A"}:
+            return None
+        return text
+
+    def _get_display_sniper_points(self, record, raw_result: Any) -> Dict[str, Optional[str]]:
+        """Prefer raw dashboard sniper strings for history display, then fall back to numeric DB columns."""
+        raw_points: Dict[str, Any] = {}
+        if isinstance(raw_result, dict):
+            for candidate in (raw_result.get("dashboard"), raw_result):
+                if not isinstance(candidate, dict):
+                    continue
+                raw_points = DatabaseManager._find_sniper_in_dashboard(candidate) or raw_points
+                if any(raw_points.get(k) is not None for k in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")):
+                    break
+
+        display_points: Dict[str, Optional[str]] = {}
+        for field in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit"):
+            raw_value = self._normalize_display_sniper_value(raw_points.get(field))
+            if raw_value is not None:
+                display_points[field] = raw_value
+                continue
+            db_value = getattr(record, field, None)
+            display_points[field] = str(db_value) if db_value is not None else None
+        return display_points
+
+    def _record_to_detail_dict(self, record) -> Dict[str, Any]:
+        """
+        Convert an AnalysisHistory ORM record to a detail response dict.
+        """
+        raw_result = parse_json_field(record.raw_result)
+
+        model_used = (raw_result or {}).get("model_used") if isinstance(raw_result, dict) else None
+        model_used = normalize_model_used(model_used)
+        sniper_points = self._get_display_sniper_points(record, raw_result)
+
+        context_snapshot = None
+        if record.context_snapshot:
+            try:
+                context_snapshot = json.loads(record.context_snapshot)
+            except json.JSONDecodeError:
+                context_snapshot = record.context_snapshot
+
+        return {
+            "id": record.id,
+            "query_id": record.query_id,
+            "stock_code": record.code,
+            "stock_name": record.name,
+            "report_type": record.report_type,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "model_used": model_used,
+            "analysis_summary": record.analysis_summary,
+            "operation_advice": record.operation_advice,
+            "trend_prediction": record.trend_prediction,
+            "sentiment_score": record.sentiment_score,
+            "sentiment_label": self._get_sentiment_label(record.sentiment_score or 50),
+            "ideal_buy": sniper_points.get("ideal_buy"),
+            "secondary_buy": sniper_points.get("secondary_buy"),
+            "stop_loss": sniper_points.get("stop_loss"),
+            "take_profit": sniper_points.get("take_profit"),
+            "news_content": record.news_content,
+            "raw_result": raw_result,
+            "context_snapshot": context_snapshot,
+        }
 
     def get_news_intel(self, query_id: str, limit: int = 20) -> List[Dict[str, str]]:
         """

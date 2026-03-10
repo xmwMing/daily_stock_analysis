@@ -62,45 +62,6 @@ class ToolDefinition:
             schema["required"] = required
         return schema
 
-    def to_gemini_declaration(self) -> dict:
-        """
-        Convert to Gemini FunctionDeclaration dict.
-
-        Gemini uses a flat ``parameters`` dict with ``type: "OBJECT"``,
-        ``properties``, and ``required`` keys.
-        """
-        properties: Dict[str, Any] = {}
-        required: List[str] = []
-        type_map = {
-            "string": "STRING",
-            "number": "NUMBER",
-            "integer": "INTEGER",
-            "boolean": "BOOLEAN",
-            "array": "ARRAY",
-            "object": "OBJECT",
-        }
-        for p in self.parameters:
-            prop: Dict[str, Any] = {
-                "type": type_map.get(p.type, "STRING"),
-                "description": p.description,
-            }
-            if p.enum:
-                prop["enum"] = p.enum
-            properties[p.name] = prop
-            if p.required:
-                required.append(p.name)
-        decl: Dict[str, Any] = {
-            "name": self.name,
-            "description": self.description,
-            "parameters": {
-                "type": "OBJECT",
-                "properties": properties,
-            },
-        }
-        if required:
-            decl["parameters"]["required"] = required
-        return decl
-
     def to_openai_tool(self) -> dict:
         """Convert to OpenAI ``tools`` list element format."""
         return {
@@ -110,14 +71,6 @@ class ToolDefinition:
                 "description": self.description,
                 "parameters": self._params_json_schema(),
             },
-        }
-
-    def to_anthropic_tool(self) -> dict:
-        """Convert to Anthropic ``tools`` list element format."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self._params_json_schema(),
         }
 
 
@@ -174,19 +127,11 @@ class ToolRegistry:
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 
-    # ----- Multi-provider schema generation -----
-
-    def to_gemini_declarations(self) -> List[dict]:
-        """Generate Gemini FunctionDeclaration list."""
-        return [t.to_gemini_declaration() for t in self._tools.values()]
+    # ----- Schema generation -----
 
     def to_openai_tools(self) -> List[dict]:
-        """Generate OpenAI tools list."""
+        """Generate OpenAI-format tools list (used by litellm for all providers)."""
         return [t.to_openai_tool() for t in self._tools.values()]
-
-    def to_anthropic_tools(self) -> List[dict]:
-        """Generate Anthropic tools list."""
-        return [t.to_anthropic_tool() for t in self._tools.values()]
 
     # ----- Execution -----
 
@@ -196,8 +141,13 @@ class ToolRegistry:
         Returns the result as a JSON-serializable value.
         Raises ``KeyError`` if tool not found.
         Raises the handler's exception on execution failure.
+
+        Supports Gemini namespaced tool names (e.g. default_api:get_realtime_quote -> get_realtime_quote).
         """
         tool_def = self._tools.get(name)
+        if tool_def is None and ":" in name:
+            # Gemini may return namespaced names like default_api:get_realtime_quote
+            tool_def = self._tools.get(name.split(":", 1)[-1])
         if tool_def is None:
             raise KeyError(f"Tool '{name}' not found in registry. Available: {self.list_names()}")
 
