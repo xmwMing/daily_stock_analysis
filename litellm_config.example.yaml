@@ -1,5 +1,5 @@
 # ===================================
-# LiteLLM Router 配置模板
+# 高级模型路由 YAML 模板（底层兼容 LiteLLM Router）
 # ===================================
 # 配套文档：docs/LLM_CONFIG_GUIDE.md 第 3.2 节
 #
@@ -16,6 +16,18 @@
 # ===================================
 
 model_list:
+  # --- siliconflow (OpenAI 兼容，一个 Key 使用多种模型) ---
+  # 这是一个自定义 OpenAI 兼容模型渠道的示例
+  - model_name: openai/Qwen/Qwen3.5-397B-A17B
+    litellm_params:
+      model: openai/Qwen/Qwen3.5-397B-A17B
+      api_key: "os.environ/LITELLM_API_KEY" # 从环境变量读取 Key，安全防泄漏
+      api_base: https://api.siliconflow.cn/v1
+      # 以下配置是表示如何启用Qwen模型的enable_thinking开关
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+
   # --- AIHubmix (OpenAI 兼容，一个 Key 使用多种模型) ---
   - model_name: openai/gpt-4o-mini
     litellm_params:
@@ -63,6 +75,12 @@ model_list:
   #     model: openai/meta-llama/llama-3-70b-instruct
   #     api_key: "os.environ/OPENROUTER_API_KEY"
   #     api_base: https://openrouter.ai/api/v1
+
+  # --- Ollama 本地模型 ---
+  # - model_name: ollama/qwen3:8b
+  #   litellm_params:
+  #     model: ollama/qwen3:8b
+  #     api_base: http://localhost:11434
 
 # ===================================
 # Router 设置（可选）
