@@ -69,7 +69,6 @@ class HotStockFinder:
         # 从配置加载获取数量
         self.fetch_count = HOT_STOCK_CONFIG.get('fetch_count', 30)
         self.top_n = int(HOT_STOCK_CONFIG.get('top_n', 5))
-        self.enrich_limit = max(self.top_n * 4, 20)
         configured_workers = int(HOT_STOCK_CONFIG.get('max_concurrent', 10))
         self.enrich_workers = enrich_workers if enrich_workers is not None else max(1, min(configured_workers, 6))
 
@@ -84,7 +83,7 @@ class HotStockFinder:
         }
 
         logger.info(f"HotStockFinder 初始化完成: 缓存TTL={cache_ttl}秒, "
-                   f"每个榜单获取{self.fetch_count}只, enrich并发={self.enrich_workers}, enrich候选上限={self.enrich_limit}, "
+                   f"每个榜单获取{self.fetch_count}只, enrich并发={self.enrich_workers}, "
                    f"过滤条件=[价格:{self.min_price}-{self.max_price}元, "
                    f"上市>={self.min_list_days}天, "
                    f"科创板/创业板股票={self.include_star_stock}]")
@@ -189,11 +188,10 @@ class HotStockFinder:
             )
 
             # 先做轻量过滤，再限制 enrich 候选，避免对大池逐个请求实时行情
-            prefiltered_stocks = self._apply_prefilters(all_stocks)
-            enrich_candidates = self._select_enrich_candidates(prefiltered_stocks)
+            enrich_candidates = self._apply_prefilters(all_stocks)
             logger.info(
                 "热门池轻量过滤后 %s 只，进入实时 enrich 候选 %s 只",
-                len(prefiltered_stocks),
+                len(enrich_candidates),
                 len(enrich_candidates),
             )
 
@@ -797,23 +795,6 @@ class HotStockFinder:
                     continue
             prefiltered.append(stock)
         return prefiltered
-
-    def _select_enrich_candidates(self, stocks: List[StockInfo]) -> List[StockInfo]:
-        """Keep the hottest candidates for realtime quote enrichment."""
-        if len(stocks) <= self.enrich_limit:
-            return stocks
-
-        ranked = sorted(
-            stocks,
-            key=lambda s: (
-                float(s.amount or 0.0),
-                float(s.turnover_rate or 0.0),
-                float(s.volume or 0.0),
-                abs(float(s.change_pct or 0.0)),
-            ),
-            reverse=True,
-        )
-        return ranked[: self.enrich_limit]
 
     def _is_st_stock(self, name: str) -> bool:
         """
