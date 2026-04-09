@@ -25,10 +25,11 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 
+_INITIAL_PROCESS_ENV = dict(os.environ)
+
 from dotenv import dotenv_values
 from src.config import setup_env
 
-_INITIAL_PROCESS_ENV = dict(os.environ)
 setup_env()
 
 # 代理配置 - 通过 USE_PROXY 环境变量控制，默认关闭
@@ -520,9 +521,10 @@ def run_full_analysis(
                 )
 
                 recommendations = hot_recommender.get_recommendations()
+                hot_top_n = max(1, int(getattr(hot_recommender, 'top_n', 5)))
 
                 top_stock_codes: List[str] = []
-                for rec in recommendations[:5]:
+                for rec in recommendations[:hot_top_n]:
                     code = canonical_stock_code(rec.stock_info.code)
                     if code and code not in top_stock_codes:
                         top_stock_codes.append(code)
@@ -972,7 +974,7 @@ def main() -> int:
             return 0
 
         # 模式4: 仅热门股票推荐
-        if args.hot_stocks_only:
+        if getattr(args, 'hot_stocks_only', False):
             logger.info("模式: 仅热门股票推荐")
             notifier = NotificationService()
 
@@ -983,9 +985,10 @@ def main() -> int:
 
                     hot_recommender = HotStockRecommender()
                     recommendations = hot_recommender.get_recommendations()
+                    hot_top_n = max(1, int(getattr(hot_recommender, 'top_n', 5)))
 
                     top_stock_codes: List[str] = []
-                    for rec in recommendations[:5]:
+                    for rec in recommendations[:hot_top_n]:
                         code = canonical_stock_code(rec.stock_info.code)
                         if code and code not in top_stock_codes:
                             top_stock_codes.append(code)

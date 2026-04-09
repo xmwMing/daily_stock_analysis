@@ -119,14 +119,19 @@ class StockRecommender:
         logger.info(f"开始分析 {len(hot_stocks)} 只热门股票...")
         start_time = time.time()
         
-        # 并发分析所有股票
+        # 先按市场热度做候选收敛，避免对大池全部做历史数据分析
+        analysis_limit = max(top_n * 3, 12)
+        analysis_candidates = self._select_analysis_candidates(hot_stocks, analysis_limit)
+        logger.info(f"分析候选收敛: {len(hot_stocks)} -> {len(analysis_candidates)}")
+
+        # 并发分析候选股票
         recommendations = []
-        
+
         with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
             # 提交所有分析任务
             future_to_stock = {
                 executor.submit(self._analyze_stock, stock): stock
-                for stock in hot_stocks
+                for stock in analysis_candidates
             }
             
             # 收集结果
@@ -139,15 +144,15 @@ class StockRecommender:
                     recommendation = future.result()
                     if recommendation:
                         recommendations.append(recommendation)
-                        logger.info(f"[{completed}/{len(hot_stocks)}] {stock.code} {stock.name} "
+                        logger.info(f"[{completed}/{len(analysis_candidates)}] {stock.code} {stock.name} "
                                   f"分析完成: 评分={recommendation.score}, "
                                   f"分类={recommendation.category}, "
                                   f"风险={recommendation.risk_level}")
                     else:
-                        logger.warning(f"[{completed}/{len(hot_stocks)}] {stock.code} {stock.name} "
+                        logger.warning(f"[{completed}/{len(analysis_candidates)}] {stock.code} {stock.name} "
                                      f"分析失败或评分不足")
                 except Exception as e:
-                    logger.error(f"[{completed}/{len(hot_stocks)}] {stock.code} {stock.name} "
+                    logger.error(f"[{completed}/{len(analysis_candidates)}] {stock.code} {stock.name} "
                                f"分析异常: {e}", exc_info=True)
         
         # 过滤评分低于阈值的股票
@@ -171,6 +176,23 @@ class StockRecommender:
         logger.info("=" * 60)
         
         return top_recommendations
+
+    def _select_analysis_candidates(self, hot_stocks: List[StockInfo], limit: int) -> List[StockInfo]:
+        """Select hottest stocks for deep analysis."""
+        if len(hot_stocks) <= limit:
+            return hot_stocks
+
+        ranked = sorted(
+            hot_stocks,
+            key=lambda s: (
+                float(s.amount or 0.0),
+                float(s.turnover_rate or 0.0),
+                abs(float(s.change_pct or 0.0)),
+                float(s.volume or 0.0),
+            ),
+            reverse=True,
+        )
+        return ranked[:limit]
     
     def _analyze_stock(self, stock: StockInfo) -> Optional[Recommendation]:
         """

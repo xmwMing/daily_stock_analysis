@@ -68,6 +68,8 @@ class HotStockFinder:
 
         # 从配置加载获取数量
         self.fetch_count = HOT_STOCK_CONFIG.get('fetch_count', 30)
+        self.top_n = int(HOT_STOCK_CONFIG.get('top_n', 5))
+        self.enrich_limit = max(self.top_n * 4, 20)
         configured_workers = int(HOT_STOCK_CONFIG.get('max_concurrent', 10))
         self.enrich_workers = enrich_workers if enrich_workers is not None else max(1, min(configured_workers, 6))
 
@@ -82,7 +84,7 @@ class HotStockFinder:
         }
 
         logger.info(f"HotStockFinder 初始化完成: 缓存TTL={cache_ttl}秒, "
-                   f"每个榜单获取{self.fetch_count}只, enrich并发={self.enrich_workers}, "
+                   f"每个榜单获取{self.fetch_count}只, enrich并发={self.enrich_workers}, enrich候选上限={self.enrich_limit}, "
                    f"过滤条件=[价格:{self.min_price}-{self.max_price}元, "
                    f"上市>={self.min_list_days}天, "
                    f"科创板/创业板股票={self.include_star_stock}]")
@@ -186,8 +188,17 @@ class HotStockFinder:
                 f"人气榜={self.stats['turnover_count']}, 讨论榜={self.stats['deal_count']}"
             )
 
+            # 先做轻量过滤，再限制 enrich 候选，避免对大池逐个请求实时行情
+            prefiltered_stocks = self._apply_prefilters(all_stocks)
+            enrich_candidates = self._select_enrich_candidates(prefiltered_stocks)
+            logger.info(
+                "热门池轻量过滤后 %s 只，进入实时 enrich 候选 %s 只",
+                len(prefiltered_stocks),
+                len(enrich_candidates),
+            )
+
             # 使用DataFetcherManager获取详细实时行情数据
-            all_stocks = self._enrich_stock_data(all_stocks)
+            all_stocks = self._enrich_stock_data(enrich_candidates)
 
             # 应用过滤条件
             filtered_stocks = self._apply_filters(all_stocks)
@@ -238,7 +249,7 @@ class HotStockFinder:
         try:
             code = stock.code.replace('SH', '').replace('SZ', '')
             logger.debug(f"[获取数据] 处理股票: {code} - {stock.name}")
-            quote = self.data_manager.get_realtime_quote(code)
+            quote = self._get_realtime_quote_for_hot_pool(code)
 
             if quote:
                 stock.price = quote.price or stock.price
@@ -264,6 +275,30 @@ class HotStockFinder:
         except Exception as e:
             logger.error(f"[获取错误] 处理 {stock.code} 时出错: {e}")
             return stock
+
+    def _get_realtime_quote_for_hot_pool(self, stock_code: str):
+        """Prefer Sina realtime quote for hot-pool enrichment, fallback to manager routing."""
+        try:
+            # 热门池 enrich 优先尝试新浪接口（单股场景通常比腾讯更稳定）
+            fetchers = self.data_manager._get_fetchers_snapshot()
+            for fetcher in fetchers:
+                if fetcher.name != 'AkshareFetcher':
+                    continue
+                if not hasattr(fetcher, 'get_realtime_quote'):
+                    break
+                quote = self.data_manager._call_fetcher_method(
+                    fetcher,
+                    'get_realtime_quote',
+                    stock_code,
+                    source='sina',
+                )
+                if quote is not None:
+                    return quote
+                break
+        except Exception as exc:
+            logger.debug("热门池新浪实时行情尝试失败，改用默认路由: %s", exc)
+
+        return self.data_manager.get_realtime_quote(stock_code)
 
     def _fetch_top_gainers(self, limit: int = 100) -> Optional[pd.DataFrame]:
         """
@@ -743,6 +778,42 @@ class HotStockFinder:
                    f"科创板股票={filter_stats['star_stock']}")
 
         return filtered
+
+    def _apply_prefilters(self, stocks: List[StockInfo]) -> List[StockInfo]:
+        """Apply cheap local filters before realtime enrichment."""
+        if not stocks:
+            return []
+
+        prefiltered: List[StockInfo] = []
+        for stock in stocks:
+            if self._is_st_stock(stock.name):
+                continue
+            if not self.include_star_stock and self._is_filtered_board_stock(stock.code):
+                continue
+            if stock.list_days > 0 and stock.list_days < self.min_list_days:
+                continue
+            if stock.price > 0:
+                if stock.price < self.min_price or stock.price > self.max_price:
+                    continue
+            prefiltered.append(stock)
+        return prefiltered
+
+    def _select_enrich_candidates(self, stocks: List[StockInfo]) -> List[StockInfo]:
+        """Keep the hottest candidates for realtime quote enrichment."""
+        if len(stocks) <= self.enrich_limit:
+            return stocks
+
+        ranked = sorted(
+            stocks,
+            key=lambda s: (
+                float(s.amount or 0.0),
+                float(s.turnover_rate or 0.0),
+                float(s.volume or 0.0),
+                abs(float(s.change_pct or 0.0)),
+            ),
+            reverse=True,
+        )
+        return ranked[: self.enrich_limit]
 
     def _is_st_stock(self, name: str) -> bool:
         """
