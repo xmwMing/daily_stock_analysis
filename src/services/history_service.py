@@ -730,8 +730,11 @@ class HistoryService:
                 else:
                     chip_emoji = "🚨"
                 report_lines.extend([
-                    f"**{labels['chip_label']}**: {chip_data.get('profit_ratio', 'N/A')} | {chip_data.get('avg_cost', 'N/A')} | "
-                    f"{chip_data.get('concentration', 'N/A')} {chip_emoji}{chip_health}",
+                    f"**{labels['chip_label']}**: {labels['chip_profit_ratio_label']} {chip_data.get('profit_ratio', 'N/A')} | "
+                    f"{labels['chip_avg_cost_label']} {chip_data.get('avg_cost', 'N/A')} | "
+                    f"{labels['chip_concentration_label']} {chip_data.get('concentration', 'N/A')} | "
+                    f"{labels['chip_health_label']} {chip_emoji}{chip_health}",
+                    f"💡 *{labels['chip_concentration_hint']}*",
                     "",
                 ])
 

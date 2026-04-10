@@ -972,10 +972,21 @@ class NotificationService(
                         ])
                     # 筹码结构
                     if chip_data:
-                        chip_health = localize_chip_health(chip_data.get('chip_health', 'N/A'), report_language)
+                        raw_chip_health = chip_data.get('chip_health', 'N/A')
+                        chip_health = localize_chip_health(raw_chip_health, report_language)
+                        normalized_chip_health = str(raw_chip_health or "").strip().lower()
+                        if normalized_chip_health in {"健康", "healthy"}:
+                            chip_emoji = "✅"
+                        elif normalized_chip_health in {"一般", "average"}:
+                            chip_emoji = "⚠️"
+                        else:
+                            chip_emoji = "🚨"
                         report_lines.extend([
-                            f"**{labels['chip_label']}**: {chip_data.get('profit_ratio', 'N/A')} | {chip_data.get('avg_cost', 'N/A')} | "
-                            f"{chip_data.get('concentration', 'N/A')} {chip_health}",
+                            f"**{labels['chip_label']}**: {labels['chip_profit_ratio_label']} {chip_data.get('profit_ratio', 'N/A')} | "
+                            f"{labels['chip_avg_cost_label']} {chip_data.get('avg_cost', 'N/A')} | "
+                            f"{labels['chip_concentration_label']} {chip_data.get('concentration', 'N/A')} | "
+                            f"{labels['chip_health_label']} {chip_emoji}{chip_health}",
+                            f"💡 *{labels['chip_concentration_hint']}*",
                             "",
                         ])
                 
