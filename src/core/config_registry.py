@@ -10,6 +10,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
+from src.config import AGENT_MAX_STEPS_DEFAULT
+
 SCHEMA_VERSION = "2026-03-29"
 
 _CATEGORY_DEFINITIONS: List[Dict[str, Any]] = [
@@ -1563,14 +1565,14 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "AGENT_MAX_STEPS": {
         "title": "Agent Max Steps",
-        "description": "Maximum reasoning-step ceiling for Agent mode. In orchestrator mode, each sub-agent keeps min(its default, this limit) so lower-default specialists are not inflated.",
+        "description": f"Maximum reasoning-step limit for Agent mode. At the default ({AGENT_MAX_STEPS_DEFAULT}), each sub-agent keeps its own preset. When raised above {AGENT_MAX_STEPS_DEFAULT}, all sub-agents adopt this value. When lowered below a sub-agent's preset, that sub-agent is capped at this value.",
         "category": "agent",
         "data_type": "integer",
         "ui_control": "number",
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "10",
+        "default_value": str(AGENT_MAX_STEPS_DEFAULT),
         "options": [],
         "validation": {"min": 1, "max": 50},
         "display_order": 20,

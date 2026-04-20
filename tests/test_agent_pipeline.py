@@ -40,12 +40,12 @@ class TestAgentConfig(unittest.TestCase):
     @patch('src.config.load_dotenv')
     def test_default_agent_config(self, _mock_dotenv):
         """Agent mode should be disabled by default."""
-        from src.config import Config
+        from src.config import AGENT_MAX_STEPS_DEFAULT, Config
         Config._instance = None
         config = Config._load_from_env()
         self.assertEqual(config.agent_litellm_model, "")
         self.assertFalse(config.agent_mode)
-        self.assertEqual(config.agent_max_steps, 10)
+        self.assertEqual(config.agent_max_steps, AGENT_MAX_STEPS_DEFAULT)
         self.assertEqual(config.agent_skills, [])
 
     @patch.dict(os.environ, {
@@ -334,6 +334,7 @@ class TestAgentResultConversion(unittest.TestCase):
             mock_cfg.max_workers = 2
             mock_cfg.agent_mode = True
             mock_cfg.agent_max_steps = 10
+            mock_cfg.agent_orchestrator_timeout_s = 0
             mock_cfg.agent_skills = []
             mock_cfg.bocha_api_keys = []
             mock_cfg.tavily_api_keys = []
@@ -628,7 +629,8 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
              patch('src.core.pipeline.GeminiAnalyzer'), \
              patch('src.core.pipeline.NotificationService'), \
              patch('src.core.pipeline.SearchService'), \
-             patch('src.agent.factory.build_agent_executor') as mock_build_executor:
+             patch('src.agent.factory.build_agent_executor') as mock_build_executor, \
+             patch('src.agent.executor.AgentExecutor.run') as mock_agent_run:
 
             mock_cfg = MagicMock()
             mock_cfg.max_workers = 2
@@ -668,6 +670,7 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
             mock_executor = MagicMock()
             mock_executor.run.return_value = agent_result
             mock_build_executor.return_value = mock_executor
+            mock_agent_run.return_value = agent_result
 
             news_response = MagicMock()
             news_response.success = True

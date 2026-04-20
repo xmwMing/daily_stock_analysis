@@ -155,7 +155,7 @@
 | `LONGBRIDGE_PRINT_QUOTE_PACKAGES` | 連線時是否列印行情包（未設定時預設 `false`；設為 `1`/`true`/`yes` 開啟） | 可選 |
 | `AGENT_MODE` | 啟用 Agent 策略問股模式（內部統一命名為 skill，`true`/`false`，預設 `false`） | 可選 |
 | `AGENT_LITELLM_MODEL` | Agent 專用主模型（可選）；留空時繼承主模型，無 provider 前綴時按 `openai/<model>` 解析 | 可選 |
-| `AGENT_MAX_STEPS` | Agent 最大推理步數上限（預設 `10`）；多 Agent orchestrator 模式下按 `min(子 Agent 預設值, AGENT_MAX_STEPS)` 生效，不會抬高低預設值 Agent 的步數 | 可選 |
+| `AGENT_MAX_STEPS` | Agent 最大推理步數上限（預設 `10`）；保持預設時各子 Agent 依自身預設步數運行；主動調高到高於預設值時，所有子 Agent 統一採用該值；若設定值低於某子 Agent 的預設步數，則仍按該值作為上限進行限制 | 可選 |
 | `AGENT_SKILLS` | 逗號分隔的策略技能 id。留空時使用 metadata 宣告的主預設策略 skill（內建預設為 `bull_trend`）；使用 `all` 可啟用所有已載入策略技能。 | 可選 |
 | `AGENT_SKILL_DIR` | 自訂策略技能目錄（預設沿用內建 `strategies/` 相容路徑） | 可選 |
 

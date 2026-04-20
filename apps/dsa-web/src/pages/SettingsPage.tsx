@@ -25,6 +25,14 @@ type DesktopWindow = Window & {
   };
 };
 
+function getDesktopAppVersion() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return (window as DesktopWindow).dsaDesktop?.version?.trim() || '';
+}
+
 function formatDesktopEnvFilename() {
   const now = new Date();
   const pad = (value: number) => value.toString().padStart(2, '0');
@@ -42,6 +50,8 @@ const SettingsPage: React.FC = () => {
   const [showImportConfirm, setShowImportConfirm] = useState(false);
   const desktopImportRef = useRef<HTMLInputElement | null>(null);
   const isDesktopRuntime = typeof window !== 'undefined' && Boolean((window as DesktopWindow).dsaDesktop);
+  const desktopAppVersion = getDesktopAppVersion();
+  const shouldShowDesktopVersionCard = Boolean(desktopAppVersion);
 
   // Set page title
   useEffect(() => {
@@ -289,7 +299,9 @@ const SettingsPage: React.FC = () => {
                 title="版本信息"
                 description="用于确认当前 WebUI 静态资源是否已经切换到最新构建。"
               >
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div
+                  className={`grid grid-cols-1 gap-3 ${shouldShowDesktopVersionCard ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}
+                >
                   <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
                       WebUI 版本
@@ -314,6 +326,16 @@ const SettingsPage: React.FC = () => {
                       {WEB_BUILD_INFO.buildTime}
                     </p>
                   </div>
+                  {shouldShowDesktopVersionCard ? (
+                    <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
+                        桌面端版本
+                      </p>
+                      <p className="mt-2 break-all font-mono text-sm text-foreground">
+                        {desktopAppVersion}
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
                 <p className="text-xs leading-6 text-muted-text">
                   重新执行前端构建或 Docker 镜像构建后，此处的构建标识和构建时间会更新，可用来确认当前页面资源是否已切换。

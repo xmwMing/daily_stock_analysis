@@ -408,6 +408,7 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      additionalArguments: [`--dsa-desktop-version=${app.getVersion()}`],
     },
   });
   logStartup('BrowserWindow created');

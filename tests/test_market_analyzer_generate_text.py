@@ -321,6 +321,7 @@ class TestMarketAnalyzerBypassFix:
             cfg.llm_model_list = []
             cfg.openai_base_url = None
             cfg.market_review_region = "cn"
+            cfg.report_language = "zh"
             mock_cfg.return_value = cfg
             mock_cfg2.return_value = cfg
 
@@ -334,6 +335,7 @@ class TestMarketAnalyzerBypassFix:
 
             ma = MarketAnalyzer.__new__(MarketAnalyzer)
             ma.analyzer = analyzer
+            ma.config = cfg
             ma.profile = CN_PROFILE
             ma.strategy = get_market_strategy_blueprint("cn")
             ma.region = "cn"
@@ -397,6 +399,147 @@ class TestMarketAnalyzerBypassFix:
         _, kwargs = ma.analyzer.generate_text.call_args
         assert kwargs["max_tokens"] == 8192
         assert kwargs["temperature"] == 0.7
+
+    def test_generate_template_review_uses_english_shell_for_cn_when_report_language_is_en(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.config.report_language = "en"
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(
+                    code="000001",
+                    name="上证指数",
+                    current=3300.0,
+                    change=12.0,
+                    change_pct=0.36,
+                )
+            ],
+            up_count=3200,
+            down_count=1800,
+            limit_up_count=88,
+            limit_down_count=5,
+            total_amount=14567.0,
+            top_sectors=[{"name": "AI算力", "change_pct": 3.25}],
+            bottom_sectors=[{"name": "煤炭", "change_pct": -1.12}],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert "A-share Market Recap" in result
+        assert "### 1. Market Summary" in result
+        assert "### 3. Breadth & Liquidity" in result
+        assert "Turnover (CNY 100m)" in result
+        assert "### 4. Sector Highlights" in result
+        assert "### 6. Strategy Framework" in result
+        assert "### 一、市场总结" not in result
+
+    def test_generate_template_review_keeps_chinese_shell_for_us_when_report_language_is_default(self):
+        from src.core.market_profile import US_PROFILE
+        from src.core.market_strategy import get_market_strategy_blueprint
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.region = "us"
+        ma.profile = US_PROFILE
+        ma.strategy = get_market_strategy_blueprint("us")
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(
+                    code="SPX",
+                    name="标普500",
+                    current=5200.0,
+                    change=-18.0,
+                    change_pct=-0.35,
+                )
+            ],
+        )
+
+        result = ma.generate_market_review(overview, [])
+
+        assert "## 2026-03-05 大盘复盘" in result
+        assert "### 一、市场总结" in result
+        assert "今日美股市场整体呈现**小幅下跌**态势。" in result
+        assert "### 1. Market Summary" not in result
+        assert "US Market Recap" not in result
+
+    def test_inject_data_into_review_matches_english_headings(self):
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.config.report_language = "en"
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(
+                    code="000001",
+                    name="上证指数",
+                    current=3300.0,
+                    change=12.0,
+                    change_pct=0.36,
+                    amount=145000000000.0,
+                )
+            ],
+            up_count=3200,
+            down_count=1800,
+            flat_count=100,
+            limit_up_count=88,
+            limit_down_count=5,
+            total_amount=14567.0,
+            top_sectors=[{"name": "AI算力", "change_pct": 3.25}],
+            bottom_sectors=[{"name": "煤炭", "change_pct": -1.12}],
+        )
+        review = """## 2026-03-05 A-share Market Recap
+
+### 1. Market Summary
+Summary text.
+
+### 2. Index Commentary
+Index text.
+
+### 4. Sector Highlights
+Sector text.
+"""
+
+        result = ma._inject_data_into_review(review, overview)
+
+        assert "Advancers **3200**" in result
+        assert "Turnover **14567** (CNY 100m)" in result
+        assert "| Index | Last | Change % | Turnover (CNY 100m) |" in result
+        assert "Leaders: **AI算力**(+3.25%)" in result
+        assert "Laggards: **煤炭**(-1.12%)" in result
+
+    def test_us_english_indices_do_not_label_turnover_as_cny(self):
+        from src.core.market_profile import US_PROFILE
+        from src.core.market_strategy import get_market_strategy_blueprint
+        from src.market_analyzer import MarketOverview, MarketIndex
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value=None)
+        ma.config.report_language = "en"
+        ma.region = "us"
+        ma.profile = US_PROFILE
+        ma.strategy = get_market_strategy_blueprint("us")
+        overview = MarketOverview(
+            date="2026-03-05",
+            indices=[
+                MarketIndex(
+                    code="SPX",
+                    name="S&P 500",
+                    current=5200.0,
+                    change=35.0,
+                    change_pct=0.68,
+                    amount=9876543210.0,
+                )
+            ],
+        )
+
+        result = ma._build_indices_block(overview)
+
+        assert "CNY 100m" not in result
+        assert "Turnover (USD bn)" in result
+        assert "| S&P 500 | 5200.00 |" in result
 
     def test_no_private_attribute_access_in_market_analyzer_source(self):
         """Static guard: market_analyzer.py must not access private analyzer attrs."""

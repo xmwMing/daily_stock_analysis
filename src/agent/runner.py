@@ -595,7 +595,7 @@ def run_agent_loop(
         total_tokens=total_tokens,
         provider=provider_used,
         models_used=models_used,
-        error=f"Agent exceeded max steps ({max_steps})",
+        error=f"Agent exceeded max steps ({max_steps}). Try increasing AGENT_MAX_STEPS if analysis tasks are complex.",
         messages=messages,
     )
 

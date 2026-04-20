@@ -125,7 +125,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `CUSTOM_WEBHOOK_BEARER_TOKEN` | Bearer token for custom webhooks (if required) | Optional |
 | `SINGLE_STOCK_NOTIFY` | Send notification immediately after each stock | Optional |
 | `REPORT_TYPE` | `simple`, `full`, or `brief` (Docker recommended: `full`) | Optional |
-| `REPORT_LANGUAGE` | Report output language: `zh` (default Chinese) / `en` (English); affects prompt instructions, Markdown templates, notification fallbacks, and fixed labels in the Web report view | Optional |
+| `REPORT_LANGUAGE` | Report output language: `zh` (default Chinese) / `en` (English); affects prompt instructions, Markdown templates, notification fallbacks, and fixed labels in the Web report view. The bundled `daily_analysis.yml` already maps this variable, so setting it in Actions Secrets/Variables works out of the box | Optional |
 | `ANALYSIS_DELAY` | Delay between stocks and market review (seconds) | Optional |
 
 > Note: Configure at least one channel; multiple channels will all receive notifications.
@@ -161,7 +161,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `WECHAT_MSG_TYPE` | WeChat Work message type, default `markdown`, set to `text` for plain markdown text | Optional |
 | `AGENT_MODE` | Enable Agent strategy chat mode (internally normalized as `skill`, `true`/`false`, default `false`) | Optional |
 | `AGENT_LITELLM_MODEL` | Optional Agent-only primary model; when empty it inherits the primary model, and bare names are normalized to `openai/<model>` | Optional |
-| `AGENT_MAX_STEPS` | Max reasoning-step ceiling for Agent mode (default `10`); in orchestrator mode each sub-agent uses `min(its default, AGENT_MAX_STEPS)` instead of a hard override | Optional |
+| `AGENT_MAX_STEPS` | Max reasoning-step limit for Agent mode (default `10`); at the default each sub-agent keeps its own preset, when raised above the default all sub-agents adopt this value, and when lowered below a sub-agent's preset that sub-agent is capped at this value | Optional |
 | `AGENT_SKILLS` | Comma-separated active strategy-skill ids. Leave empty to use the primary default strategy skill declared in metadata (built-in default: `bull_trend`); use `all` to activate every loaded strategy skill. | Optional |
 | `AGENT_SKILL_DIR` | Custom strategy-skill directory (default built-in `strategies/` compatibility path) | Optional |
 

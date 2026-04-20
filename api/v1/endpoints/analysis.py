@@ -609,6 +609,24 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 (raw_result or {}).get("report_language") if isinstance(raw_result, dict) else None
             )
             stock_name = get_localized_stock_name(record.name, record.code, report_language)
+
+            # Extract current_price / change_pct from context_snapshot
+            current_price = None
+            change_pct = None
+            context_snapshot = parse_json_field(getattr(record, 'context_snapshot', None))
+            if context_snapshot and isinstance(context_snapshot, dict):
+                enhanced_context = context_snapshot.get('enhanced_context') or {}
+                realtime = enhanced_context.get('realtime') or {}
+                current_price = realtime.get('price')
+                change_pct = realtime.get('change_pct')
+                realtime_quote_raw = context_snapshot.get('realtime_quote_raw') or {}
+                if current_price is None:
+                    current_price = realtime_quote_raw.get('price')
+                if change_pct is None:
+                    change_pct = realtime_quote_raw.get('change_pct')
+                if change_pct is None:
+                    change_pct = realtime_quote_raw.get('pct_chg')
+
             # Build report from DB record so completed tasks return real data
             report_dict = AnalysisReport(
                 meta=ReportMeta(
@@ -620,6 +638,8 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     report_language=report_language,
                     created_at=record.created_at.isoformat() if record.created_at else None,
                     model_used=model_used,
+                    current_price=current_price,
+                    change_pct=change_pct,
                 ),
                 summary=ReportSummary(
                     sentiment_score=record.sentiment_score,

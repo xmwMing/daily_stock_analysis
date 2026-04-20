@@ -154,6 +154,12 @@ win-unpacked/
 
 > 建议：macOS 用户在升级 DMG 前先执行一次 `导出 .env`，这样即使旧 `.app` 被整体替换，也能在新版本里直接恢复配置
 
+### 设置页版本信息
+
+- `系统设置 -> 版本信息` 中的“桌面端版本”由 Electron 主进程的 `app.getVersion()` 提供，并通过 preload bridge 暴露给前端
+- 开发态 `npm run dev` 与打包态 `npm run build` / 安装包都会复用同一条版本注入链路，不再在 `preload.js` 里维护独立硬编码版本号
+- `README.md` 继续保留安装和运行入口说明；这类桌面端运行时细节统一落在本专题文档维护，避免入门文档膨胀
+
 ## 常见问题
 
 ### 启动后一直显示 "Preparing backend..."
